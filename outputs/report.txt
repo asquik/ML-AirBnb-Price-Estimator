@@ -1,0 +1,31 @@
+Executive summary:
+ - Dataset reduced from 9550 → 7612 rows after filtering price to (50, 1000). Final N = 7612.
+ - Central tendency: mean=$167.12, median=$133.00 (skew present).
+
+Data quality & image availability:
+ - Sampled image URL reachability (HEAD requests): {'ok': 100, 'bad': 0, 'timeout': 0}. Examples: {
+  "ok": [
+    "https://a0.muscache.com/pictures/736399/fa6c3103_original.jpg",
+    "https://a0.muscache.com/pictures/9e59d417-4b6a-4db1-94a6-ccac69e236bf.jpg",
+    "https://a0.muscache.com/pictures/airflow/Hosting-50479/original/f32fe1c1-7e87-43cf-b30a-0ef1dbed6757.jpg"
+  ],
+  "bad": [],
+  "timeout": []
+}.
+
+Feature notes & preprocessing decisions:
+ - Price: cleaned from string to float; extreme and erroneous entries removed per spec.
+ - Text: `description` + `amenities` concatenated for V+L backbone input.
+ - Tabular: only `room_type`, `neighbourhood_cleansed`, `accommodates`, `bathrooms`, `bedrooms` kept — numeric columns min-max normalized.
+
+Initial modeling recommendations (for professor defense):
+ 1) Use a frozen CLIP/ViLT backbone for image/text feature extraction to preserve transfer learning benefits and computational efficiency.
+ 2) Model target: try both raw-price MSE and log-price MSE — log reduces heteroscedasticity.
+ 3) Ablations: image-only, text-only, tabular-only to measure marginal contributions of 'curb appeal'.
+
+Top-level descriptive findings:
+ - Room type distribution (top): {'Entire home/apt': 6748, 'Private room': 828, 'Hotel room': 29, 'Shared room': 7}
+ - Top neighbourhoods (by sample count): {'Ville-Marie': 2849, 'Le Plateau-Mont-Royal': 1541, 'Côte-des-Neiges-Notre-Dame-de-Grâce': 642, 'Le Sud-Ouest': 552, 'Rosemont-La Petite-Patrie': 524}
+
+Conclusion:
+ - Data is suitable for the planned late-fusion transfer-learning experiment after minor cleaning and handling of unreachable image URLs. Recommended next step: implement the Dataset class and run small-scale sanity training using a frozen backbone.

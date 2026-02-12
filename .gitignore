@@ -36,4 +36,4 @@ images/
 .venv/
 
 # Script outputs and artifacts
-outputs/
+# outputs/  <-- kept out of git by default, but EDA report/figures will be tracked when intentionally committed
