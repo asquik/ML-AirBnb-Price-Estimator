@@ -32,8 +32,8 @@ logs/
 # Images (if you download many images, keep them out of git)
 images/
 
+# Script outputs and artifacts
+outputs/
+
 # Virtual environment
 .venv/
-
-# Script outputs and artifacts
-# outputs/  <-- kept out of git by default, but EDA report/figures will be tracked when intentionally committed

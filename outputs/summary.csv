@@ -1,85 +1,36 @@
-column,dtype,n_missing,n_unique
-id,int64,0,7612
-listing_url,str,0,7612
-scrape_id,int64,0,1
-last_scraped,str,0,1
-source,str,0,1
-name,str,0,7364
-description,str,113,5948
-neighborhood_overview,str,4362,2169
-picture_url,str,0,7489
-host_id,int64,0,3134
-host_url,str,0,3134
-host_name,str,1,1925
-host_since,str,1,2267
-host_location,str,2011,156
-host_about,str,3653,1440
-host_response_time,str,737,4
-host_response_rate,str,737,43
-host_acceptance_rate,str,640,84
-host_is_superhost,str,283,2
-host_thumbnail_url,str,1,2981
-host_picture_url,str,1,2981
-host_neighbourhood,str,4901,103
-host_listings_count,float64,1,64
-host_total_listings_count,float64,1,85
-host_verifications,str,1,6
-host_has_profile_pic,str,1,2
-host_identity_verified,str,1,2
-neighbourhood,str,4362,1
-neighbourhood_cleansed,str,0,32
-neighbourhood_group_cleansed,float64,7612,0
-latitude,float64,0,6143
-longitude,float64,0,6100
-property_type,str,0,36
-room_type,str,0,4
-accommodates,int64,0,16
-bathrooms,float64,3,14
-bathrooms_text,str,4,24
-bedrooms,float64,10,12
-beds,float64,3,19
-amenities,str,0,6899
-price,float64,0,556
-minimum_nights,int64,0,70
-maximum_nights,int64,0,155
-minimum_minimum_nights,float64,6,79
-maximum_minimum_nights,float64,6,89
-minimum_maximum_nights,float64,6,144
-maximum_maximum_nights,float64,6,147
-minimum_nights_avg_ntm,float64,0,434
-maximum_nights_avg_ntm,float64,0,310
-calendar_updated,float64,7612,0
-has_availability,str,79,1
-availability_30,int64,0,31
-availability_60,int64,0,61
-availability_90,int64,0,91
-availability_365,int64,0,366
-calendar_last_scraped,str,0,1
-number_of_reviews,int64,0,413
-number_of_reviews_ltm,int64,0,133
-number_of_reviews_l30d,int64,0,18
-availability_eoy,int64,0,106
-number_of_reviews_ly,int64,0,131
-estimated_occupancy_l365d,int64,0,79
-estimated_revenue_l365d,float64,0,2428
-first_review,str,1432,2335
-last_review,str,1432,867
-review_scores_rating,float64,1432,123
-review_scores_accuracy,float64,1432,116
-review_scores_cleanliness,float64,1432,137
-review_scores_checkin,float64,1432,103
-review_scores_communication,float64,1432,113
-review_scores_location,float64,1432,115
-review_scores_value,float64,1432,141
-license,str,3460,2309
-instant_bookable,str,0,2
-calculated_host_listings_count,int64,0,49
-calculated_host_listings_count_entire_homes,int64,0,46
-calculated_host_listings_count_private_rooms,int64,0,24
-calculated_host_listings_count_shared_rooms,int64,0,5
-reviews_per_month,float64,1432,743
-price_raw,str,0,556
-text,str,0,7232
-accommodates_norm,float64,0,16
-bathrooms_norm,float64,3,14
-bedrooms_norm,float64,10,12
+Metric,Value
+March - Total Records,9731
+March - Records with Price Data,8917
+March - NaN Prices,814
+March - NaN Price %,8.37%
+March - Mean Price,$146.69
+March - Median Price,$100.00
+March - Std Dev Price,$310.00
+March - Min Price,$13.00
+March - Max Price,$13294.00
+,
+June - Total Records,9700
+June - Records with Price Data,8742
+June - NaN Prices,958
+June - NaN Price %,9.88%
+June - Mean Price,$188.76
+June - Median Price,$134.00
+June - Std Dev Price,$297.46
+June - Min Price,$11.00
+June - Max Price,$13294.00
+,
+Sept - Total Records,9495
+Sept - Records with Price Data,8431
+Sept - NaN Prices,1064
+Sept - NaN Price %,11.21%
+Sept - Mean Price,$180.94
+Sept - Median Price,$125.00
+Sept - Std Dev Price,$497.29
+Sept - Min Price,$12.00
+Sept - Max Price,$26724.00
+,
+Listings Appearing 3 Times,6903 (71.6% of records)
+Listings Appearing 2 Times,2442 (16.9% of records)
+Listings Appearing 1 Time,3333 (11.5% of records)
+Total Unique Listings,12678
+Total Records,28926
