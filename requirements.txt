@@ -10,3 +10,4 @@ torch>=2.0
 torchvision>=0.15
 transformers>=4.30
 sentencepiece>=0.1.97
+pytest>=8.0

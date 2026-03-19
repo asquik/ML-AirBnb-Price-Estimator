@@ -5,7 +5,9 @@ A compact, reproducible project that predicts nightly Airbnb price using a lateâ
 ## Current state
 - EDA and report are available (`outputs/report.md`, `outputs/figures/`).
 - A resumable image downloader is provided (`scripts/download_images.py`).
-- Planned next steps: implement `Dataset` + preprocessing and the fusion `nn.Module`, then run baseline training.
+- Decision tracking log initialized at `logs/decision_log.md`.
+- Simple tabular baseline trainer implemented at `scripts/train_tabular_baseline.py`.
+- Planned next steps: iterate on tabular baselines, then add text/image branches and compare gains.
 
 ## Motivation
 - Estimate the marginal value contributed by listing images and textual quality beyond standard tabular features (the "curb appeal" effect).
@@ -22,6 +24,16 @@ A compact, reproducible project that predicts nightly Airbnb price using a lateâ
    .venv\Scripts\python scripts/eda.py
    ```
 3. Inspect the committed report at `outputs/report.md`.
+
+4. Train the simple tabular Decision Tree baseline:
+  ```bash
+  python3 scripts/train_tabular_baseline.py
+  ```
+
+## Decision log and model-run workflow
+- Record every meaningful preprocessing/modeling choice in `logs/decision_log.md`.
+- Each baseline run appends metrics and configuration to `outputs/model_runs.csv`.
+- Start simple (decision tree), then compare alternative model compositions using the same run log.
 
 ## Downloader (resumeâ€‘safe & paced)
 - Basic run (resume-aware, applies EDA price filter by default):
@@ -47,7 +59,7 @@ A compact, reproducible project that predicts nightly Airbnb price using a lateâ
 - Maintain separation between data processing, dataset, model, and training logic.
 
 ## Next deliverables
-- `Dataset` + preprocessing implementation (PyTorch Dataset).  
-- `models.py` with the fusion `nn.Module` and a minimal training loop.  
-- A reproducible notebook with results and ablation studies.
+- Compare multiple tabular baselines (Decision Tree configs first).  
+- Add text/image branches and run ablations against tabular baseline.  
+- Produce a reproducible notebook with final comparisons.
 
