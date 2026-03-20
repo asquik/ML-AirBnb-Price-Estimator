@@ -65,7 +65,7 @@ def test_price_parsing_and_nan_removal(mock_data_dir):
     # Total expected: 3 (Mar) + 2 (Jun) + 1 (Sep) = 6 valid rows
     assert len(df) == 6, f"Expected 6 valid rows, got {len(df)}"
     
-    march_df = df[df['snapshot_month'] == '03']
+    march_df = df[df['season_ordinal'] == 1]
     prices = march_df.set_index('id')['price'].to_dict()
     
     assert prices[1] == 150.0  # Basic numeric parsed
@@ -79,26 +79,26 @@ def test_price_parsing_and_nan_removal(mock_data_dir):
 
 def test_temporal_mapping(mock_data_dir):
     """
-    Ensures rows are correctly attributed to their source month (03, 06, 09).
+    Ensures rows are correctly mapped to semantic seasons (1=Winter, 2=Spring, 3=Summer).
     """
     processor = AirbnbDataProcessor(data_dir=mock_data_dir)
     df = processor.process()
     
-    # Verify exact row counts per month match what we explicitly kept (valid targets only)
-    month_counts = df['snapshot_month'].value_counts().to_dict()
-    assert month_counts.get('03') == 3
-    assert month_counts.get('06') == 2
-    assert month_counts.get('09') == 1
+    # Verify exact row counts per season match what we explicitly kept (valid targets only)
+    season_counts = df['season_ordinal'].value_counts().to_dict()
+    assert season_counts.get(1) == 3  # Winter (March)
+    assert season_counts.get(2) == 2  # Spring (June)
+    assert season_counts.get(3) == 1  # Summer (September)
 
 def test_schema_enforcement(mock_data_dir):
     """
-    Ensures ONLY explicitly required columns (+ snapshot_month) are returned,
+    Ensures ONLY explicitly required columns (+ season_ordinal) are returned,
     even if the raw CSVs contain extra junk columns.
     """
     processor = AirbnbDataProcessor(data_dir=mock_data_dir)
     df = processor.process()
     
-    expected_columns = set(AirbnbDataProcessor.REQUIRED_COLUMNS + ['snapshot_month'])
+    expected_columns = set(AirbnbDataProcessor.REQUIRED_COLUMNS + ['season_ordinal'])
     actual_columns = set(df.columns)
     
     assert actual_columns == expected_columns, "Processor leaked unexpected columns or dropped required ones."

@@ -121,6 +121,15 @@ The model can learn to distinguish "high price + high min_nights = monthly lease
 - Resized to 224×224 for model input
 - Embedded using frozen CLIP backbone
 
+**Seasonal Encoding:**
+- **Problem:** Raw month numbers (03, 06, 09) can mislead the model into learning spurious correlations (e.g., "higher month number → higher price").
+- **Solution:** We map months to semantic seasons based on Montreal's tourism patterns:
+  - `season_ordinal = 1` (Winter): March data (Oct–Apr in real calendar, low demand)
+  - `season_ordinal = 2` (Spring): June data (Apr–Jun, building demand)
+  - `season_ordinal = 3` (Summer): September data (Jun–Oct, peak-ish season, then cooling)
+- **Implementation:** The `AirbnbDataProcessor` stores `season_ordinal` (1, 2, 3 for model input).
+- **Trade-off:** We do not have true peak summer (July–August) data, so results reflect Montreal's shoulder seasons. This is a known limitation of the data collection.
+
 ---
 
 ## Modeling Plan & Ablation Strategy
@@ -128,7 +137,7 @@ The model can learn to distinguish "high price + high min_nights = monthly lease
 **Approach:** Measure the marginal contribution of each modality via late-fusion architecture. Hypothesis: images and text provide "curb appeal" beyond tabular features (size, location, min_nights).
 
 **Baseline (tabular only):**
-- Input: room_type, neighbourhood, accommodates, bathrooms, bedrooms, minimum_nights
+- Input: room_type, neighbourhood, accommodates, bathrooms, bedrooms, minimum_nights, season_ordinal
 - MLP → single output (price)
 - Goal: Establish variance ceiling for pure structural features
 

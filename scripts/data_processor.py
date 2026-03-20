@@ -8,6 +8,9 @@ class AirbnbDataProcessor:
     applies universal cleaning rules, and returns a single 'Master' DataFrame.
     This ensures all downstream models (tabular, text, image, multi-modal) 
     are evaluated on the exact same universe of data.
+    
+    Seasons are encoded ordinally to prevent spurious correlation with raw month numbers.
+    Mapping: Winter=1 (Oct-Apr), Spring=2 (Apr-Jun), Summer=3 (Jun-Oct).
     """
     
     # We load only the features identified during EDA that are relevant 
@@ -26,6 +29,14 @@ class AirbnbDataProcessor:
         "price"                     # Target variable
     ]
 
+    # Seasonal mapping: month strings (from filename) → ordinal season codes
+    MONTH_TO_SEASON = {
+        "03": 1,  # March → Winter (October-April)
+        "06": 2,  # June → Spring (April-June)
+        "09": 3,  # September → Summer (June-October)
+    }
+    SEASON_NAMES = {1: "Winter", 2: "Spring", 3: "Summer"}
+
     def __init__(self, data_dir: str):
         self.data_dir = Path(data_dir)
         self.snapshot_files = [
@@ -42,11 +53,14 @@ class AirbnbDataProcessor:
             if not file_path.exists():
                 raise FileNotFoundError(f"Expected data file not found: {file_path}")
             
-            # Extract month (03, 06, 09) from filename to maintain temporal context
+            # Extract month (03, 06, 09) from filename and map to semantic season
             month = file_name.split("-")[1]
+            season_ordinal = self.MONTH_TO_SEASON.get(month)
+            if season_ordinal is None:
+                raise ValueError(f"Unknown month code in file {file_name}: {month}")
             
             df = pd.read_csv(file_path, usecols=lambda c: c in self.REQUIRED_COLUMNS)
-            df['snapshot_month'] = month
+            df['season_ordinal'] = season_ordinal  # Clean semantic feature for models
             dataframes.append(df)
             
         return pd.concat(dataframes, ignore_index=True)
