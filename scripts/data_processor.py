@@ -1,13 +1,15 @@
 import pandas as pd
 from pathlib import Path
-from typing import List
+from typing import Tuple
 
 class AirbnbDataProcessor:
     """
     A unified data processor that loads raw Airbnb monthly snapshots,
-    applies universal cleaning rules, and returns a single 'Master' DataFrame.
+    applies universal cleaning rules, splits into deterministic train/test sets,
+    and exports as compressed Parquet files.
+    
     This ensures all downstream models (tabular, text, image, multi-modal) 
-    are evaluated on the exact same universe of data.
+    are evaluated on the exact same train/test split.
     
     Seasons are encoded ordinally to prevent spurious correlation with raw month numbers.
     Mapping: Winter=1 (Oct-Apr), Spring=2 (Apr-Jun), Summer=3 (Jun-Oct).
@@ -37,13 +39,18 @@ class AirbnbDataProcessor:
     }
     SEASON_NAMES = {1: "Winter", 2: "Spring", 3: "Summer"}
 
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, output_dir: str = None):
         self.data_dir = Path(data_dir)
+        self.output_dir = Path(output_dir) if output_dir else Path(data_dir) / "data"
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.snapshot_files = [
             "listings-03-25.csv",
             "listings-06-25.csv",
             "listings-09-25.csv"
         ]
+        # Fixed seed for reproducible train/test split
+        self.RANDOM_STATE = 42
+        self.TRAIN_TEST_SPLIT = 0.8
 
     def _load_snapshots(self) -> pd.DataFrame:
         """Loads and concatenates the monthly snapshot CSVs."""
@@ -96,6 +103,32 @@ class AirbnbDataProcessor:
         # Return the master "signature object"
         return clean_df
 
+    def split_and_export(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Loads, cleans, splits into train/test (80/20), and exports as Parquet files.
+        Returns (train_df, test_df).
+        
+        Parquet files are compressed by default and include all tabular + text features.
+        The 'picture_url' column is retained for optional image branch models.
+        """
+        master_df = self.process()
+        
+        # Deterministic split using listing ID to ensure reproducibility
+        train_df = master_df.sample(frac=self.TRAIN_TEST_SPLIT, random_state=self.RANDOM_STATE)
+        test_df = master_df.drop(train_df.index)
+        
+        # Export to Parquet (compressed by default with gzip)
+        train_path = self.output_dir / "train.parquet"
+        test_path = self.output_dir / "test.parquet"
+        
+        train_df.to_parquet(train_path, compression='gzip', index=False)
+        test_df.to_parquet(test_path, compression='gzip', index=False)
+        
+        print(f"✅ Train set exported: {train_path} ({len(train_df)} rows)")
+        print(f"✅ Test set exported: {test_path} ({len(test_df)} rows)")
+        
+        return train_df, test_df
+
 
 if __name__ == "__main__":
     # Smoke test to ensure it runs independently
@@ -104,8 +137,12 @@ if __name__ == "__main__":
     print("Initializing Data Processor...")
     processor = AirbnbDataProcessor(data_dir=project_root)
     
-    print("Processing master dataset...")
-    master_df = processor.process()
+    print("Processing and splitting master dataset...")
+    train_df, test_df = processor.split_and_export()
     
-    print(f"Success! Master dataset generated with {len(master_df)} records.")
-    print("Available columns for models:", master_df.columns.tolist())
+    print(f"\n✅ Success! Train/test split complete.")
+    print(f"   Train: {len(train_df)} records")
+    print(f"   Test:  {len(test_df)} records")
+    print(f"   Parquet files saved to: {processor.output_dir}")
+    print(f"\nAvailable columns for models:")
+    print(f"   {train_df.columns.tolist()}")

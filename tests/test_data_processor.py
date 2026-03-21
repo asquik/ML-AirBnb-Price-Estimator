@@ -130,3 +130,67 @@ def test_reproducibility(mock_data_dir):
     df2 = processor.process()
     
     assert_frame_equal(df1, df2)
+
+def test_split_and_export(mock_data_dir, tmp_path):
+    """
+    Ensures train/test split is deterministic, correctly proportioned,
+    and that Parquet files are exported with expected structure.
+    """
+    output_dir = tmp_path / "output"
+    processor = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir)
+    
+    train_df, test_df = processor.split_and_export()
+    
+    # Check proportions: 80/20 split (80% train, 20% test)
+    total = len(train_df) + len(test_df)
+    assert total == 6, f"Expected 6 total rows, got {total}"
+    assert len(train_df) == 5, f"Expected 5 train rows (~80%), got {len(train_df)}"
+    assert len(test_df) == 1, f"Expected 1 test row (~20%), got {len(test_df)}"
+    
+    # Check that parquet files were created
+    train_parquet = output_dir / "train.parquet"
+    test_parquet = output_dir / "test.parquet"
+    assert train_parquet.exists(), f"Train parquet not found at {train_parquet}"
+    assert test_parquet.exists(), f"Test parquet not found at {test_parquet}"
+    
+    # Load parquets and verify structure (reset index since parquet saves with index=False)
+    loaded_train = pd.read_parquet(train_parquet).reset_index(drop=True)
+    loaded_test = pd.read_parquet(test_parquet).reset_index(drop=True)
+    assert_frame_equal(loaded_train, train_df.reset_index(drop=True))
+    assert_frame_equal(loaded_test, test_df.reset_index(drop=True))
+
+def test_split_deterministic(mock_data_dir, tmp_path):
+    """
+    Ensures that the train/test split is deterministic and reproducible
+    when using the same random_state (42).
+    """
+    output_dir1 = tmp_path / "output1"
+    output_dir2 = tmp_path / "output2"
+    
+    processor1 = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir1)
+    processor2 = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir2)
+    
+    train_df1, test_df1 = processor1.split_and_export()
+    train_df2, test_df2 = processor2.split_and_export()
+    
+    # Both splits should be identical (same rows in same order)
+    assert_frame_equal(train_df1, train_df2)
+    assert_frame_equal(test_df1, test_df2)
+
+def test_split_contains_all_data(mock_data_dir, tmp_path):
+    """
+    Ensures that train + test covers all original data with no overlap or missing rows.
+    """
+    output_dir = tmp_path / "output"
+    processor = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir)
+    
+    master_df = processor.process()
+    train_df, test_df = processor.split_and_export()
+    
+    # Combined train + test should have all rows from master
+    combined_ids = set(train_df['id'].tolist() + test_df['id'].tolist())
+    master_ids = set(master_df['id'].tolist())
+    
+    assert len(combined_ids) == len(master_ids), f"Combined has {len(combined_ids)} unique IDs, master has {len(master_ids)}"
+    assert combined_ids == master_ids, "Train/test IDs don't cover all original data"
+    assert len(train_df) + len(test_df) == len(master_df), f"Train ({len(train_df)}) + test ({len(test_df)}) = {len(train_df) + len(test_df)}, but master has {len(master_df)}"
