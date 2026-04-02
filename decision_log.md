@@ -21,6 +21,13 @@ A lightweight journal for all data and modeling decisions.
 
 ## Entries
 
+## 2026-04-02 — Persist Box–Cox transformed target in data processor exports
+- **Context:** Price is heavily right-skewed with extreme high outliers. Modeling on raw price makes training unstable and allows outliers to dominate MSE. We want a minimal, reversible stabilization applied at data-export time so all downstream experiments use the same transformed label.
+- **Decision:** Add a `price_bc` column to the master DataFrame exported by `scripts/data_processor.py` (computed via `sklearn.preprocessing.PowerTransformer(method='box-cox')`) and include it in `train.parquet` and `test.parquet`. Also persist the fitted transformer object alongside the exported parquets. Fit transformer only on training set to avoid data leakage.
+- **Reasoning:** Box–Cox (fitted via `PowerTransformer`) finds a power transform that can better normalize skewed, strictly-positive data. Persisting the transformer ensures reproducible inverse transforms for reporting RMSE in dollars. Fitting only on train set avoids leakage.
+- **Impacted files:** `scripts/data_processor.py` (computes and persists `price_bc` and the transformer), `data/train.parquet`, `data/test.parquet`, `reports/report.md` (noted change in inspection section).
+- **Validation:** Run `scripts/data_processor.py` → exported `train.parquet` and `test.parquet` contain `price_bc`, and a transformer file (e.g., `price_transformer.joblib`) exists in the output folder. Confirm `price_bc` equals the transform produced by the persisted transformer for sample rows.
+- **Next action:** Train models on `price_bc` (and report RMSE on dollars after inverse-transforming predictions). Document performance differences between raw- and Box–Cox-target training in experiment logs.
 ## 2026-03-21 — Refactor data processor: deterministic train/test split, parquet export
 - **Context:** For fair model comparison and cloud submission, all models must evaluate on the same held-out test set. Previously, data processor only loaded/cleaned data; train/test splitting was deferred to individual model scripts (inconsistent).
 - **Decision:** Refactor `data_processor.py` to include deterministic 80/20 train/test split (seed=42) and export both splits as compressed parquet files in `data/` directory.

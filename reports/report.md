@@ -168,3 +168,15 @@ The model can learn to distinguish "high price + high min_nights = monthly lease
 - [ ] Train baseline (tabular only) with frozen backbones to confirm training loop works
 - [ ] Run full ablation and log all RMSE/MAE results to CSV
 - [ ] Document final findings in this report
+
+### Additional data inspection (concise)
+
+- `room_type`: 4 categories (majority: "Entire home/apt").
+- `neighbourhood_cleansed`: 33 neighborhoods; `Ville-Marie` and `Le Plateau-Mont-Royal` are most common.
+- `price`: mean ≈ $172.88, std ≈ $396.13; extreme high outliers observed (max ≈ $26,724).
+- `minimum_nights`: median and 75th percentile are 31; ~57.5% of records have `minimum_nights >= 30`.
+
+Notes and actions applied:
+- To stabilize modeling and reduce the influence of extreme price outliers, the exported master dataset now includes a Box–Cox transformed target column `price_bc` (fitted with `sklearn.preprocessing.PowerTransformer(method='box-cox')` on training data only). The fitted transformer is persisted alongside the exported parquets for reproducibility. Models may train on `price_bc` and inverse-transform predictions for final reporting in dollars.
+
+These changes were applied programmatically and persisted into the exported parquets for reproducible downstream analysis.

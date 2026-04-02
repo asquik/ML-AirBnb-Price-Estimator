@@ -194,3 +194,25 @@ def test_split_contains_all_data(mock_data_dir, tmp_path):
     assert len(combined_ids) == len(master_ids), f"Combined has {len(combined_ids)} unique IDs, master has {len(master_ids)}"
     assert combined_ids == master_ids, "Train/test IDs don't cover all original data"
     assert len(train_df) + len(test_df) == len(master_df), f"Train ({len(train_df)}) + test ({len(test_df)}) = {len(train_df) + len(test_df)}, but master has {len(master_df)}"
+
+
+def test_remove_nonpositive_prices(tmp_path):
+    """
+    Ensure rows with price == 0 or negative are removed by the processor.
+    """
+    base_columns = {col: "mock" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
+    # Create rows: one valid, one zero, one negative
+    rows = [
+        dict(base_columns, id=1, price="100"),
+        dict(base_columns, id=2, price="0"),
+        dict(base_columns, id=3, price="-50"),
+    ]
+    for fname in ["listings-03-25.csv", "listings-06-25.csv", "listings-09-25.csv"]:
+        # write the same small set to each snapshot to exercise processing
+        pd.DataFrame(rows).to_csv(tmp_path / fname, index=False)
+
+    processor = AirbnbDataProcessor(data_dir=tmp_path)
+    df = processor.process()
+
+    # Only the positive price row should remain
+    assert (df['price'] > 0).all(), "Processor failed to remove non-positive price rows"

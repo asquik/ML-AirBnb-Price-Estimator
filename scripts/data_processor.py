@@ -1,4 +1,7 @@
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import PowerTransformer
+import joblib
 from pathlib import Path
 from typing import Tuple
 
@@ -73,9 +76,8 @@ class AirbnbDataProcessor:
         return pd.concat(dataframes, ignore_index=True)
 
     def _clean_price(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Cleans the target price column and removes invalid/missing values."""
+        """Cleans the target price column and removes invalid/missing values. Keeps only raw price."""
         df = df.copy()
-        
         # Strip currency symbols and commas, convert to float
         df['price'] = (
             df['price']
@@ -85,11 +87,9 @@ class AirbnbDataProcessor:
             .str.strip()
         )
         df['price'] = pd.to_numeric(df['price'], errors='coerce')
-        
-        # Universal Rule: Drop rows where the target (price) is entirely missing.
-        # This guarantees models won't accidentally train/test on blank targets.
+        # Drop rows where price is missing or non-positive
         df = df.dropna(subset=['price'])
-        
+        df = df[df['price'] > 0]
         return df
 
     def process(self) -> pd.DataFrame:
@@ -105,28 +105,37 @@ class AirbnbDataProcessor:
 
     def split_and_export(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Loads, cleans, splits into train/test (80/20), and exports as Parquet files.
+        Loads, cleans, splits into train/test (80/20), applies Box-Cox to price (fit on train only), and exports as Parquet files.
         Returns (train_df, test_df).
-        
-        Parquet files are compressed by default and include all tabular + text features.
-        The 'picture_url' column is retained for optional image branch models.
         """
         master_df = self.process()
-        
         # Deterministic split using listing ID to ensure reproducibility
         train_df = master_df.sample(frac=self.TRAIN_TEST_SPLIT, random_state=self.RANDOM_STATE)
         test_df = master_df.drop(train_df.index)
-        
+
+        # Fit Box-Cox transformer on train only, add price_bc to both splits
+        pt = PowerTransformer(method='box-cox', standardize=False)
+        train_prices = train_df['price'].values.reshape(-1, 1)
+        pt.fit(train_prices)
+        train_df = train_df.copy()
+        test_df = test_df.copy()
+        train_df['price_bc'] = pt.transform(train_prices).ravel()
+        test_df['price_bc'] = pt.transform(test_df['price'].values.reshape(-1, 1)).ravel()
+        self._price_transformer = pt
+
         # Export to Parquet (compressed by default with gzip)
         train_path = self.output_dir / "train.parquet"
         test_path = self.output_dir / "test.parquet"
-        
         train_df.to_parquet(train_path, compression='gzip', index=False)
         test_df.to_parquet(test_path, compression='gzip', index=False)
-        
+        # Persist the fitted price transformer for reproducibility
+        transformer_path = self.output_dir / 'price_transformer.joblib'
+        joblib.dump(self._price_transformer, transformer_path)
+        print(f"✅ Persisted price transformer: {transformer_path}")
+
         print(f"✅ Train set exported: {train_path} ({len(train_df)} rows)")
         print(f"✅ Test set exported: {test_path} ({len(test_df)} rows)")
-        
+
         return train_df, test_df
 
 
