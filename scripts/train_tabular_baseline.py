@@ -21,8 +21,8 @@ def train_and_evaluate(X_train, y_train, X_test, y_test):
     best_params_dict = {}
     all_results = []
     
-    max_depths = [8, 12, 15, 20, 25, 30]
-    min_samples_leafs = [5, 10, 20, 30]
+    max_depths = [2, 4, 5, 6, 7, 8, 12, 15]
+    min_samples_leafs = [2, 3, 4, 5, 6, 10, ]
     
     print("Training models with different hyperparameters...")
     print("-" * 70)

@@ -1,4 +1,4 @@
-# Experiment Workflow & Timeline (5 Weeks → 1 Final Notebook)
+# Experiment Workflow & Timeline — Status Update (April 2, 2026)
 
 ## **OVERARCHING GOAL**
 Build a **single Jupyter notebook** (`.ipynb`) that:
@@ -12,161 +12,212 @@ Build a **single Jupyter notebook** (`.ipynb`) that:
 This notebook is the ONLY submission. Everything else (data processor, image downloader, baseline scripts) is preparation.
 
 ### **Data Distribution Strategy**
-- **`train.parquet`** and **`test.parquet`** uploaded to Google Drive
+- **`train_tabular.parquet`** and **`test_tabular.parquet`** (preprocessed data)
   - Deterministic 80/20 split (seed=42)
   - All models use the same held-out test set for fair comparison
-  - Compressed with gzip (lightweight)
-  - Includes: tabular features, text (description + amenities), picture_url for image branch
-- **`images/all/`** stays on Google Drive (optional, only downloaded for image branch)
-  - Not downloaded unless image model is used
-  - Referenced via listing `id` in the DataFrames
+  - Compressed with gzip, ~4.5 MB total
+  - Includes: encoded room_type, neighbourhood, numeric features scaled
+  - Reproducibility: encoders/scalers persisted in `data/tabular_encoders.joblib`
+- **`train.parquet`** and **`test.parquet`** (raw data for text/image branches)
+  - Same 80/20 split, includes description, amenities, picture_url
+  - Used by text/image models that apply their own embeddings
+- **`images/all/`** downloaded locally or linked from source (optional)
+  - Not strictly required for Decision Tree baseline
+  - Will be uploaded to Google Drive if image branch is pursued
 
 ---
 
-## **COMPRESSED TIMELINE: 5 Weeks**
+## **REVISED TIMELINE: ~3 Weeks Remaining (Weeks 3-5 as of April 2)**
 
-### **Week 1: Decision Tree Regression Baseline (LOCAL)**
-**Objective:** Establish solid baseline with fair test set for all models.
-
-**Tasks:**
-- [x] Run `scripts/data_processor.py` to generate deterministic train/test split
-  - Outputs: `data/train.parquet` (20,973 rows) + `data/test.parquet` (5,243 rows)
-  - Seed=42 for reproducibility
-- [ ] Build `scripts/train_tabular_baseline.py` using `train.parquet` + `test.parquet`
-  - Decision Tree regressor (tabular only: room_type, neighbourhood, accommodates, bathrooms, bedrooms, minimum_nights, season_ordinal)
-  - Quick hyperparameter sweep: max_depth=[8, 12, 15], min_samples_leaf=[10, 20]
-  - Log best RMSE/MAE/R² to `outputs/model_runs.csv`
-- [ ] Create `prepare_submission.py`: bundle `train.parquet` + `test.parquet` + image metadata
-  - Output: parquet files + `images/metadata.csv` (listing_id → image directory mapping)
-- [ ] Upload `train.parquet`, `test.parquet`, and `images/` to Google Drive, get shareable link
-- [ ] Update decision log with baseline RMSE and split details
-- [ ] Commit: `"feat: deterministic train/test split + Decision Tree baseline"`
-
-**Deliverable:** Google Drive link with data + images ready; local baseline results logged
+**Current Status (as of April 2, 2026):** 
+- ✅ EDA complete with detailed findings (report.md)
+- ✅ Data processor finalized with dual parquet exports + preprocessing
+- ✅ 80/20 train/test split deterministic (seed=42)
+- ✅ Tabular encoders/scalers persisted for reproducibility
+- ✅ Decision Tree baseline script exists (`train_tabular_baseline.py`)
+- ⏳ **Next: Run baseline experiment, then iterate on text/image branches**
 
 ---
 
-### **Week 2: Text Branch (LOCAL → LOG RESULTS)**
-**Objective:** Measure text contribution, prepare code for notebook.
+## **WEEK 1 (March 18-21): DATA PIPELINE & BASELINE SETUP** ✅ COMPLETE
+**Objective:** Establish data foundations and model baseline.
+
+**Completed Tasks:**
+- [x] Deterministic train/test split (80/20, seed=42) with parquet export
+- [x] Dual preprocessing pipeline: raw parquets (for text/image) + tabular parquets (for tree/MLP)
+- [x] Tabular feature encoding: LabelEncoder for categoricals, StandardScaler for numerics
+- [x] Persist encoders to `data/tabular_encoders.joblib` for reproducibility
+- [x] Build `scripts/train_tabular_baseline.py` with hyperparameter sweep infrastructure
+- [x] Set up experiment logging to `outputs/model_runs.csv`
+- [x] Update decision log with preprocessing strategy and rationale
+
+**Status:** ✅ Data pipeline ready. Baseline script exists but hasn't been run yet.
+
+**Outstanding (defer to Week 2):**
+- [ ] Run baseline experiment and log results
+- [ ] Create `prepare_submission.py` for Drive bundling
+- [ ] Upload to Google Drive
+
+---
+
+## **WEEK 2 (April 2-8): DECISION TREE BASELINE + GOOGLE DRIVE PREP** ⏳ IN PROGRESS
+**Objective:** Run baseline experiment, finalize data for cloud submission.
 
 **Tasks:**
-- [ ] Create `scripts/text_model.py`: concatenate description+amenities, embed with DistilBERT, train MLP
-- [ ] Train model: tabular + text embeddings
+- [ ] Run `scripts/train_tabular_baseline.py` (baseline already coded, just execute)
+  - Hyperparameter sweep: max_depth=[8, 12, 15, 20, 25, 30], min_samples_leaf=[5, 10, 20, 30]
+  - Log results with timestamp to `outputs/model_runs.csv`
+  - Record best RMSE/MAE/R² and best hyperparameters
+- [ ] Analyze baseline results and update `decision_log.md` with findings
+- [ ] Create `prepare_submission.py`: bundle train/test parquets + image metadata
+  - Output: package for Google Drive (parquets + images directory export)
+- [ ] Upload `train_tabular.parquet`, `test_tabular.parquet`, `images/` to Google Drive
+  - Get shareable link for notebook download step
+  - Store link in README or a separate `GOOGLE_DRIVE_LINKS.md`
+- [ ] Commit: `"feat: baseline experiments logged, data ready for cloud"`
+
+**Deliverable:** Baseline results logged; Google Drive ready with data + images
+
+**Decision point:** Does baseline RMSE indicate good predictive signal? (proceed if RMSE < ±$200; else revisit feature engineering)
+
+---
+
+## **WEEK 3 (April 9-15): TEXT & IMAGE BRANCH EXPERIMENTS** ⏳ NOT STARTED
+**Objective:** Measure marginal contribution of text and image modalities.
+
+### **Option A: Text Branch (if pursuing)**
+- [ ] Create `scripts/text_model.py`: embed description+amenities with DistilBERT (frozen)
+  - MLP fusion head: BERT output (768D) + tabular features (7D) → hidden layer → price
+  - Train with same train/test split for fair comparison
 - [ ] Log results to `outputs/model_runs.csv`
-- [ ] Compare vs. Decision Tree: if RMSE improves >2%, keep for notebook; else skip
-- [ ] Commit: `"feat: text branch (DistilBERT), improvement=$X RMSE"`
+- [ ] Compare vs. baseline: if RMSE improves >2%, keep for notebook
 
-**Decision point:** Include text in notebook or skip? (If modest improvement, you can skip.)
-
----
-
-### **Week 3: Image Branch (LOCAL → LOG RESULTS)**
-**Objective:** Measure image contribution, prepare code for notebook.
-
-**Tasks:**
-- [ ] Create `scripts/image_model.py`: extract image features with CLIP, train MLP
-- [ ] Train model: tabular + image embeddings
+### **Option B: Image Branch (if pursuing)**
+- [ ] Create `scripts/image_model.py`: extract image features with CLIP (frozen)
+  - Handle multi-image per listing (avg or attention pooling)
+  - MLP fusion head: image embedding (512D) + tabular features → price
+  - Train with local or cloud-cached images
 - [ ] Log results to `outputs/model_runs.csv`
-- [ ] Compare vs. Decision Tree: if RMSE improves >2%, keep for notebook; else skip
-- [ ] Commit: `"feat: image branch (CLIP), improvement=$X RMSE"`
+- [ ] Compare vs. baseline: if RMSE improves >2%, keep for notebook
 
-**Decision point:** Include images in notebook or skip? (If modest improvement, you can skip.)
+**Decision point for each branch:** >2% RMSE improvement? Yes → include in notebook; No → skip for scope/time
 
 ---
 
-### **Week 4: Build Submission Notebook (CRITICAL)**
+## **WEEK 4 (April 16-22): BUILD SUBMISSION NOTEBOOK** 🔴 CRITICAL PATH
 **Objective:** Convert local experiments into single reproducible `.ipynb`.
 
-**Notebook structure:**
-1. **Cell 1-2:** Setup (imports, Google Drive authentication, download parquets)
-   - Load `train.parquet` and `test.parquet` from Drive
-   - Load image metadata if image branch is included
-2. **Cells 3-5:** Problem & EDA (explain Montreal Airbnb, show data, visualizations)
-3. **Cells 6-10:** Decision Tree Baseline
-   - Markdown: explain why Decision Tree
-   - Code: train with best hyperparameters from Week 1
-   - Results: RMSE/MAE/R², feature importance plot
-4. **Cells 11-15:** (If kept) Text Branch
-   - Markdown: explain text signal
-   - Code: train with DistilBERT (frozen backbone)
-   - Results: comparison vs. baseline
-5. **Cells 16-20:** (If kept) Image Branch
-   - Markdown: explain curb appeal
-   - Code: download images from Drive, extract CLIP features, train MLP
-   - Results: comparison vs. baseline
-6. **Cells 21-25:** Summary & Comparison
-   - Comparison table: all models side-by-side (using same test set)
-   - Key insights: which modality matters most?
-   - Limitations: data gaps, future work
-7. **Final cells:** Conclusions and reproducibility notes
+**Notebook architecture:**
+
+1. **Cells 1-3: Setup & Data Loading**
+   - Markdown: Introduction to problem (Airbnb price prediction, Montreal)
+   - Code: Install/import libraries (pandas, scikit-learn, torch, transformers, etc.)
+   - Code: Authenticate Google Drive and download `train_tabular.parquet` + `test_tabular.parquet`
+   - Display: train/test shapes and quick data preview
+
+2. **Cells 4-6: EDA & Feature Overview**
+   - Markdown: Explain dataset composition, temporal structure, outliers
+   - Code: Load parquets, show distributions (price, min_nights, room_type, etc.)
+   - Visualizations: price histogram, neighbourhood breakdown, seasonality
+
+3. **Cells 7-11: Decision Tree Baseline**
+   - Markdown: Why Decision Tree? (interpretable, fast, fair baseline)
+   - Code: Hyperparameter sweep (same as local script)
+   - Results table: RMSE, MAE, R² for best model
+   - Feature importance plot
+   - Sample predictions vs. actuals (top/bottom 5)
+
+4. **Cells 12-16: (CONDITIONAL) Text Branch**
+   - **Only include if local experiments showed >2% RMSE improvement**
+   - Markdown: Why text signal matters (description quality, amenities)
+   - Code: Embed description+amenities with DistilBERT, train MLP fusion
+   - Results: Comparison vs. baseline, RMSE delta
+   - Analysis: What aspects of text drive price?
+
+5. **Cells 17-21: (CONDITIONAL) Image Branch**
+   - **Only include if local experiments showed >2% RMSE improvement**
+   - Markdown: Why images matter (curb appeal, visual quality)
+   - Code: Download images from Drive, extract CLIP features, train MLP fusion
+   - Results: Comparison vs. baseline, RMSE delta
+   - Visualizations: sample images + predicted price impact
+
+6. **Cells 22-26: Summary & Comparison**
+   - Markdown: Recap of findings
+   - Code: Side-by-side comparison table (all models on same test set)
+   - Key insights: which modality contributes most? seasonal patterns? neighborhood effects?
+   - Limitations: data gaps (no true peak summer), single city, frozen backbones
+
+7. **Final Cell: Reproducibility Notes**
+   - Markdown: Hyperlinks to GITHUB/Google Drive
+   - Instructions for running notebook on fresh environment
 
 **Critical rules:**
-- ✅ All code is inline (NO imports from external .py files)
-- ✅ Data loaded from Google Drive parquets (train + test already split)
-- ✅ **No hardcoded paths** (all relative, uses `pathlib.Path`)
-- ✅ **Fair comparison:** all models evaluate on same `test.parquet`
-- ✅ Markdown + code alternating (narrative-driven, not just code dump)
+- ✅ All code inline (no `from scripts import ...`, copy relevant functions)
+- ✅ Data loaded from Google Drive parquets (train/test already split)
+- ✅ No hardcoded paths (use `pathlib.Path` + relative references)
+- ✅ Fair comparison (all models evaluate on same `test_tabular.parquet`)
+- ✅ Markdown + code alternating (narrative-driven)
+- ✅ Runtime <30 min total (frozen backbones key for speed)
 
 **Tasks:**
-- [ ] Create `submission_notebook.ipynb` from scratch OR convert existing code to notebook cells
-- [ ] Copy best-performing model code from Weeks 1-3 into notebook
-- [ ] Test end-to-end: runs, downloads data, trains, outputs results
-- [ ] Time notebook: target <30 min total runtime
+- [ ] Create fresh Jupyter notebook (`submission_notebook.ipynb`)
+- [ ] Copy baseline code from `train_tabular_baseline.py` (inline)
+- [ ] Add text branch code if keeping (inline)
+- [ ] Add image branch code if keeping (inline)
+- [ ] Test end-to-end: runs without errors, produces expected results
+- [ ] Time notebook execution
+- [ ] Polish markdown (headers, explanations, conclusions)
+- [ ] Export as `.ipynb`, verify file structure
 - [ ] Commit: `"feat: final submission notebook (complete, tested)"`
 
+**Deliverable:** Polished, tested `.ipynb` ready for grading
+
 ---
 
-### **Week 5: Polish & Submit (FINAL PUSH)**
-**Objective:** Final QA and submission.
+## **WEEK 5 (April 23-29): QA & SUBMISSION** 🔴 FINAL PUSH
+**Objective:** Final validation and submission.
 
 **Tasks:**
-- [ ] Test notebook on fresh Python environment (simulate grader's setup)
-- [ ] Check: all visualizations render, no errors, reproducible results
-- [ ] Add final markdown polish (headers, explanations, conclusions)
-- [ ] Export as `.ipynb`, verify file is clean
-- [ ] Create README comment with Google Drive link inside notebook (for grader)
-- [ ] Final commit: `"docs: final submission notebook ready"`
-- [ ] **Submit**
+- [ ] Test notebook on **fresh Python environment** (simulate grader setup)
+  - Create new venv, install only requirements.txt, run notebook
+  - Verify: all cells execute, no FileNotFoundError, reproducible results
+- [ ] Check: visualizations render cleanly, no truncated output
+- [ ] Add final polish to markdown (grammar, clarity, narrative flow)
+- [ ] Verify Google Drive link is shareable and accessible
+- [ ] Final commit: `"docs: final submission notebook (QA complete)"`
+- [ ] **Submit notebook + Google Drive link**
 
 ---
 
-## **FILES CREATED/MODIFIED**
+## **FILES SUMMARY**
 
-| Week | File | Purpose |
-|------|------|---------|
-| 1 | `scripts/data_processor.py` | UPDATED: now exports train/test parquets |
-| 1 | `data/train.parquet` | Deterministic train set (80%, 20,973 rows) |
-| 1 | `data/test.parquet` | Deterministic test set (20%, 5,243 rows) |
-| 1 | `scripts/train_tabular_baseline.py` | Decision Tree trainer |
-| 1 | `prepare_submission.py` | Bundle data for cloud upload |
-| 1 | Google Drive link (external) | Cloud storage (parquets + images) |
-| 2 | `scripts/text_model.py` (kept/discarded) | Text branch trainer |
-| 3 | `scripts/image_model.py` (kept/discarded) | Image branch trainer |
-| 4 | `submission_notebook.ipynb` | **FINAL DELIVERABLE** |
-| 5 | (polish only) | No new files |
-
----
-
-## **DECISION LOG ENTRIES (ONE PER WEEK)**
-
-Each Friday:
-1. What was built/tested
-2. Key result (RMSE, improvement %, keep/skip decision)
-3. Next week's goal
-4. One line in decision log
+| Week | File | Status | Purpose |
+|------|------|--------|---------|
+| 1 | `scripts/data_processor.py` | ✅ | Preprocessing + train/test split |
+| 1 | `data/train_tabular.parquet` | ✅ | Training data (80%, 20,973 rows) |
+| 1 | `data/test_tabular.parquet` | ✅ | Test data (20%, 5,243 rows) |
+| 1 | `data/tabular_encoders.joblib` | ✅ | Encoders/scalers for reproducibility |
+| 1 | `scripts/train_tabular_baseline.py` | ✅ | Decision Tree trainer |
+| 2 | `prepare_submission.py` | ⏳ | Bundle data for Google Drive |
+| 2 | Google Drive (external) | ⏳ | Cloud storage for parquets + images |
+| 3 | `scripts/text_model.py` | ⏳ Conditional | Text branch (if >2% improvement) |
+| 3 | `scripts/image_model.py` | ⏳ Conditional | Image branch (if >2% improvement) |
+| 4 | `submission_notebook.ipynb` | ⏳ | **FINAL DELIVERABLE** |
+| Decision Log | `decision_log.md` | ✅ | Ongoing decision tracking |
 
 ---
 
-## **SUBMISSION CHECKLIST**
+## **SUBMISSION CHECKLIST** 
 
 Before submitting:
-- [ ] Notebook downloads data from Google Drive (no local data needed)
-- [ ] Notebook runs end-to-end without errors
-- [ ] All models trained and compared
-- [ ] Visualizations are clear
-- [ ] Markdown explains the journey: hypothesis → experiment → result
-- [ ] Limitations and future work discussed
-- [ ] No hardcoded paths or dependencies on .py files
-- [ ] README or comment in notebook has Google Drive link
-- [ ] File is `.ipynb` format
-- [ ] Tested on fresh Python environment  
+- [ ] Notebook downloads data from Google Drive (no local files needed by grader)
+- [ ] Notebook runs end-to-end without errors on fresh Python environment
+- [ ] All models trained and compared fairly (same test set)
+- [ ] Visualizations are clear and informative
+- [ ] Markdown explains journey: hypothesis → experiment → findings
+- [ ] Limitations acknowledged (data gaps, single city, frozen backbones)
+- [ ] No external .py imports (all code inline in notebook)
+- [ ] No hardcoded paths (uses `pathlib`)
+- [ ] Google Drive links verified and shareable
+- [ ] File is .ipynb format, well-structured
+- [ ] Reproducibility guaranteed (seed=42, documented splits, encoder persistence)  
