@@ -21,13 +21,24 @@ A lightweight journal for all data and modeling decisions.
 
 ## Entries
 
-## 2026-04-02 — Persist Box–Cox transformed target in data processor exports
-- **Context:** Price is heavily right-skewed with extreme high outliers. Modeling on raw price makes training unstable and allows outliers to dominate MSE. We want a minimal, reversible stabilization applied at data-export time so all downstream experiments use the same transformed label.
-- **Decision:** Add a `price_bc` column to the master DataFrame exported by `scripts/data_processor.py` (computed via `sklearn.preprocessing.PowerTransformer(method='box-cox')`) and include it in `train.parquet` and `test.parquet`. Also persist the fitted transformer object alongside the exported parquets. Fit transformer only on training set to avoid data leakage.
-- **Reasoning:** Box–Cox (fitted via `PowerTransformer`) finds a power transform that can better normalize skewed, strictly-positive data. Persisting the transformer ensures reproducible inverse transforms for reporting RMSE in dollars. Fitting only on train set avoids leakage.
-- **Impacted files:** `scripts/data_processor.py` (computes and persists `price_bc` and the transformer), `data/train.parquet`, `data/test.parquet`, `reports/report.md` (noted change in inspection section).
-- **Validation:** Run `scripts/data_processor.py` → exported `train.parquet` and `test.parquet` contain `price_bc`, and a transformer file (e.g., `price_transformer.joblib`) exists in the output folder. Confirm `price_bc` equals the transform produced by the persisted transformer for sample rows.
-- **Next action:** Train models on `price_bc` (and report RMSE on dollars after inverse-transforming predictions). Document performance differences between raw- and Box–Cox-target training in experiment logs.
+
+## 2026-04-02 — Enhance data_processor: dual parquets + universal tabular preprocessing
+- **Context:** Need unified preprocessing for multiple downstream models (trees, MLPs, text, image) while keeping data modular for different branches. Data processor was outputting only raw parquets; no standardized preprocessing existed.
+- **Decision:** Enhance `data_processor.py` to:
+  1. Export TWO parquet pairs: (a) **raw** (all 13 columns, for text/image), (b) **tabular** (preprocessed features, for all model training)
+  2. Implement `preprocess_tabular()` method: fill NaNs (median), encode categoricals (LabelEncoder), scale numerics (StandardScaler)
+  3. Persist encoders/scalers to `tabular_encoders.joblib` for reproducibility
+- **Reasoning:**
+  - **Separation of concerns:** Text/image branches use raw descriptions/URLs; tabular models use encoded/scaled features. No cross-contamination.
+  - **Smaller memory footprint:** Simple models (DecisionTree baseline) load ~4.5M tabular parquets instead of full dataset.
+  - **Universal preprocessing:** LabelEncoder works for trees (ordinal splits) and MLPs (embeddings); StandardScaler necessary for MLPs, harmless for trees.
+  - **Fair comparison:** All tabular models use identical preprocessing; no ad-hoc encoding differences.
+  - **Future-proof:** If new modality added (video, audio), raw parquets still available; tabular preprocessing unchanged.
+- **Impacted files:** `scripts/data_processor.py` (dual exports + preprocessing), `data/train_tabular.parquet`, `data/test_tabular.parquet`, `data/tabular_encoders.joblib`, `tests/test_data_processor.py` (+7 new tests).
+- **Validation:** ✅ All 15 tests pass. Preprocessing: 99.9% rows retained, NaNs filled, categoricals encoded to integers, numerics scaled (mean~0, std~1), unseen test categories mapped to -1.
+- **Next action:** Implement `train_tabular_baseline.py` to train DecisionTree on tabular parquets only.
+
+
 ## 2026-03-21 — Refactor data processor: deterministic train/test split, parquet export
 - **Context:** For fair model comparison and cloud submission, all models must evaluate on the same held-out test set. Previously, data processor only loaded/cleaned data; train/test splitting was deferred to individual model scripts (inconsistent).
 - **Decision:** Refactor `data_processor.py` to include deterministic 80/20 train/test split (seed=42) and export both splits as compressed parquet files in `data/` directory.

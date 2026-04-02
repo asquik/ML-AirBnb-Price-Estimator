@@ -1,9 +1,9 @@
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import PowerTransformer
+from sklearn.preprocessing import PowerTransformer, LabelEncoder, StandardScaler
 import joblib
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Dict
 
 class AirbnbDataProcessor:
     """
@@ -103,9 +103,63 @@ class AirbnbDataProcessor:
         # Return the master "signature object"
         return clean_df
 
+    def preprocess_tabular(self, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, Dict]:
+        """
+        Preprocesses tabular features for all downstream models (trees, MLPs, text/image branches).
+        - Fills missing values in numeric columns (bathrooms, bedrooms) with median from train
+        - Encodes categorical columns (room_type, neighbourhood_cleansed) with LabelEncoder
+        - Handles unseen test categories by mapping to special code (-1)
+        - Scales all numeric features with StandardScaler (fit on train only)
+        Returns: (train_preprocessed, test_preprocessed, encoders_scalers_dict)
+        """
+        train = train_df.copy()
+        test = test_df.copy()
+        
+        # Dictionary to store all encoders and scalers for reproducibility
+        encoders_scalers = {}
+        
+        # 1. FILL MISSING VALUES in numeric columns (fit on train, apply to test)
+        numeric_fill_cols = ['bathrooms', 'bedrooms']
+        for col in numeric_fill_cols:
+            median_val = train[col].median()
+            train[col] = train[col].fillna(median_val)
+            test[col] = test[col].fillna(median_val)
+            encoders_scalers[f'{col}_median'] = median_val
+        
+        # 2. ENCODE CATEGORICAL COLUMNS with LabelEncoder
+        categorical_cols = ['room_type', 'neighbourhood_cleansed']
+        for col in categorical_cols:
+            le = LabelEncoder()
+            # Fit on train set
+            le.fit(train[col])
+            # Transform train
+            train[col] = le.transform(train[col])
+            # Transform test: use handle_unknown by mapping unseen to -1
+            test_encoded = []
+            for val in test[col]:
+                if val in le.classes_:
+                    test_encoded.append(le.transform([val])[0])
+                else:
+                    # Unseen category → special code
+                    test_encoded.append(-1)
+            test[col] = test_encoded
+            encoders_scalers[f'{col}_encoder'] = le
+        
+        # 3. SCALE NUMERIC FEATURES with StandardScaler (necessary for MLPs, harmless for trees)
+        numeric_scale_cols = ['accommodates', 'bathrooms', 'bedrooms', 'minimum_nights', 'season_ordinal']
+        scaler = StandardScaler()
+        scaler.fit(train[numeric_scale_cols])
+        train[numeric_scale_cols] = scaler.transform(train[numeric_scale_cols])
+        test[numeric_scale_cols] = scaler.transform(test[numeric_scale_cols])
+        encoders_scalers['numeric_scaler'] = scaler
+        encoders_scalers['numeric_scale_cols'] = numeric_scale_cols
+        
+        return train, test, encoders_scalers
+
     def split_and_export(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Loads, cleans, splits into train/test (80/20), applies Box-Cox to price (fit on train only), and exports as Parquet files.
+        Also preprocesses tabular features and exports preprocessed parquets for downstream models.
         Returns (train_df, test_df).
         """
         master_df = self.process()
@@ -123,7 +177,7 @@ class AirbnbDataProcessor:
         test_df['price_bc'] = pt.transform(test_df['price'].values.reshape(-1, 1)).ravel()
         self._price_transformer = pt
 
-        # Export to Parquet (compressed by default with gzip)
+        # Export raw parquets (compressed by default with gzip)
         train_path = self.output_dir / "train.parquet"
         test_path = self.output_dir / "test.parquet"
         train_df.to_parquet(train_path, compression='gzip', index=False)
@@ -132,9 +186,31 @@ class AirbnbDataProcessor:
         transformer_path = self.output_dir / 'price_transformer.joblib'
         joblib.dump(self._price_transformer, transformer_path)
         print(f"✅ Persisted price transformer: {transformer_path}")
-
         print(f"✅ Train set exported: {train_path} ({len(train_df)} rows)")
         print(f"✅ Test set exported: {test_path} ({len(test_df)} rows)")
+
+        # PREPROCESS TABULAR FEATURES for all downstream models
+        print("\nPreprocessing tabular features (fill NaNs, encode categoricals, scale numerics)...")
+        train_tabular, test_tabular, encoders_scalers = self.preprocess_tabular(train_df, test_df)
+        
+        # Export preprocessed tabular parquets
+        train_tabular_path = self.output_dir / "train_tabular.parquet"
+        test_tabular_path = self.output_dir / "test_tabular.parquet"
+        train_tabular.to_parquet(train_tabular_path, compression='gzip', index=False)
+        test_tabular.to_parquet(test_tabular_path, compression='gzip', index=False)
+        
+        # Persist encoders and scalers for reproducibility
+        encoders_path = self.output_dir / 'tabular_encoders.joblib'
+        joblib.dump(encoders_scalers, encoders_path)
+        print(f"✅ Persisted tabular encoders & scalers: {encoders_path}")
+        print(f"✅ Train tabular exported: {train_tabular_path} ({len(train_tabular)} rows)")
+        print(f"✅ Test tabular exported: {test_tabular_path} ({len(test_tabular)} rows)")
+        
+        print(f"\n📊 Preprocessing summary:")
+        print(f"   - Filled NaNs in bathrooms, bedrooms with median")
+        print(f"   - Encoded room_type and neighbourhood_cleansed with LabelEncoder")
+        print(f"   - Scaled numeric features with StandardScaler")
+        print(f"   - Unseen test categories mapped to -1")
 
         return train_df, test_df
 
@@ -149,9 +225,14 @@ if __name__ == "__main__":
     print("Processing and splitting master dataset...")
     train_df, test_df = processor.split_and_export()
     
-    print(f"\n✅ Success! Train/test split complete.")
+    print(f"\n✅ Success! Train/test split + tabular preprocessing complete.")
     print(f"   Train: {len(train_df)} records")
     print(f"   Test:  {len(test_df)} records")
     print(f"   Parquet files saved to: {processor.output_dir}")
-    print(f"\nAvailable columns for models:")
+    print(f"\nGenerated files:")
+    print(f"   - train.parquet, test.parquet (raw: for text/image branches)")
+    print(f"   - train_tabular.parquet, test_tabular.parquet (preprocessed: for all models)")
+    print(f"   - price_transformer.joblib")
+    print(f"   - tabular_encoders.joblib")
+    print(f"\nAvailable columns in raw parquets:")
     print(f"   {train_df.columns.tolist()}")

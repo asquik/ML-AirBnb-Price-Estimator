@@ -180,3 +180,17 @@ Notes and actions applied:
 - To stabilize modeling and reduce the influence of extreme price outliers, the exported master dataset now includes a Box–Cox transformed target column `price_bc` (fitted with `sklearn.preprocessing.PowerTransformer(method='box-cox')` on training data only). The fitted transformer is persisted alongside the exported parquets for reproducibility. Models may train on `price_bc` and inverse-transform predictions for final reporting in dollars.
 
 These changes were applied programmatically and persisted into the exported parquets for reproducible downstream analysis.
+
+---
+
+## Data Quality Inspection (April 2026)
+
+**Missing values:** Minimal. Only `bathrooms` (8 NaNs, 0.04%) and `bedrooms` (23 NaNs, 0.11%) in training set. Strategy: fill with median.
+
+**Zeros:** `bathrooms` has 161 zero values (1.3%), `bedrooms` has 1,685 zero values (8%)—likely intentional (studios, hostels). Retained in dataset.
+
+**Categorical features:** 100% complete. `room_type` has 4 categories (83% are "Entire home/apt"). `neighbourhood_cleansed` has 33 unique neighborhoods in train, 31 in test (Ville-Marie dominates with 35%). No data quality issues.
+
+**Numeric distributions:** `accommodates` (1–16 guests, mean 3.86), `minimum_nights` (1–365 days, median 31). Train and test distributions closely match, confirming sound 80/20 split.
+
+**Test set comparison:** Test set has 2 neighborhoods absent from training (rare edge case). Strategy: label unknown neighborhoods as special code in encoder.

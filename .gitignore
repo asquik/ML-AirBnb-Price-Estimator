@@ -26,8 +26,8 @@ logs/
 # Jupyter
 .ipynb_checkpoints/
 
-# Data (keep CSVs tracked for this academic project)
-# /data/raw/
+# Data (generated from data_processor.py; regenerate with scripts, don't commit)
+data/
 
 # Images (if you download many images, keep them out of git)
 images/
