@@ -22,6 +22,33 @@ A lightweight journal for all data and modeling decisions.
 ## Entries
 
 
+## 2026-04-05 — Implement train-validation-test split (80/10/10 instead of 80/20)
+- **Context:** TA feedback indicated that train-test split alone is insufficient for proper model development. Standard ML practice requires three splits: train (fit model + tune hyperparameters), validation (select best hyperparameters), and test (final untouched evaluation).
+- **Decision:** Refactor `split_and_export()` in data_processor.py to generate three splits instead of two:
+  - **Train (80%):** ~16,973 records — used to train models
+  - **Validation (10%):** ~2,621 records — used for hyperparameter tuning and early stopping
+  - **Test (10%):** ~2,622 records — held-out final evaluation (never touched during development)
+  - Seed=42 for reproducibility
+  - Fit all encoders/scalers on train set only; apply to validation and test (ensure no data leakage)
+- **Reasoning:**
+  - **Prevents overfitting to test set:** If we tune hyperparameters on the test set, we're indirectly training on it, making test metrics unreliable.
+  - **Proper model selection:** Validation set allows fair comparison of multiple hyperparameter configurations without peeking at test performance.
+  - **True generalization estimate:** Test set remains pristine until final submission, giving an honest estimate of model performance on unseen data.
+  - **Industry standard:** 80/10/10 is a common proportion for datasets of our size (~26K records).
+- **Impacted files:** 
+  - `scripts/data_processor.py` (modify `split_and_export()` to generate 3 splits)
+  - `tests/test_data_processor.py` (add tests for tri-split behavior, no data leakage, correct proportions)
+  - `scripts/train_tabular_baseline.py` (update to tune on validation set, report test metrics)
+  - `WORKFLOW.md` (update timeline and data distribution strategy)
+  - `reports/report.md` (clarify preprocessing section)
+- **Validation:**
+  - [ ] Write tests FIRST: verify 80/10/10 proportions, check no row overlap, confirm encoders fit to train only
+  - [ ] Verify no data leakage (encoders/scalers never see val/test sets during fitting)
+  - [ ] Ensure reproducibility (same seed → same splits across runs)
+- **Next action:** Write comprehensive test cases for train-val-test split, then implement in data_processor.py.
+
+
+
 ## 2026-04-02 — Enhance data_processor: dual parquets + universal tabular preprocessing
 - **Context:** Need unified preprocessing for multiple downstream models (trees, MLPs, text, image) while keeping data modular for different branches. Data processor was outputting only raw parquets; no standardized preprocessing existed.
 - **Decision:** Enhance `data_processor.py` to:

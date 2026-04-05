@@ -69,7 +69,37 @@ When filtering the data to *only* short-term rentals (min_nights < 31), the filt
 
 ## Preprocessing Decision
 
-**Decision:** Train on all 26,216 records (after removing NaN prices) with `minimum_nights` as a required model input feature.
+**Decision:** Implement a deterministic 80/10/10 train-validation-test split (seed=42) instead of 80/20 split.
+
+**Train-Validation-Test Strategy:**
+- **Training set (80%, ~16,973 records):** Used to fit models and initialize encoders/scalers
+- **Validation set (10%, ~2,621 records):** Used for hyperparameter tuning and model selection during development
+- **Test set (10%, ~2,622 records):** Held-out final evaluation (never touched during hyperparameter tuning or development)
+
+**Why three splits instead of two?**
+- **Prevents data leakage:** Tuning hyperparameters on the test set makes it "contaminated"—test metrics become inflated and unreliable
+- **Fair model selection:** Validation set allows comparing multiple configurations without peeking at true test performance
+- **True generalization estimate:** Test set remains pristine until the final submission, providing an honest estimate of model performance on completely unseen data
+- **Industry standard:** 80/10/10 is a common, well-justified proportion for datasets of our size
+
+**Encoder/Scaler Fitting (No Leakage):**
+- All LabelEncoders (for `room_type`, `neighbourhood_cleansed`) are fit on the training set only
+- StandardScaler for numeric features is fit on the training set only
+- Fitted encoders/scalers are then applied to validation and test sets (ensuring no information about val/test is used during fitting)
+- Unseen categories in validation/test are mapped to a special code (-1) to indicate "unknown"
+
+---
+
+**Dataset composition for modeling (after 80/10/10 split):**
+- Train: 16,973 records (fits encoders, trains models)
+- Validation: 2,621 records (tunes hyperparameters, selects best model)
+- Test: 2,622 records (final evaluation, results reported here only)
+
+---
+
+**Secondary decision: Train on all 26,216 records BEFORE splitting**
+
+**Decision:** Before splitting, use all 26,216 records (after removing NaN prices) with `minimum_nights` as a required model input feature.
 
 **Rationale for not filtering:**
 - Filtering to short-term only would eliminate 69% of training data (6,934 → 1,935 listings)
