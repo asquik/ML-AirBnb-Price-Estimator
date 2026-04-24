@@ -83,7 +83,7 @@ When filtering the data to *only* short-term rentals (min_nights < 31), the filt
 - **Industry standard:** 80/10/10 is a common, well-justified proportion for datasets of our size
 
 **Encoder/Scaler Fitting (No Leakage):**
-- All LabelEncoders (for `room_type`, `neighbourhood_cleansed`) are fit on the training set only
+- All LabelEncoders (for `room_type`, `neighbourhood_cleansed`, `property_type`, `instant_bookable`) are fit on the training set only
 - StandardScaler for numeric features is fit on the training set only
 - Fitted encoders/scalers are then applied to validation and test sets (ensuring no information about val/test is used during fitting)
 - Unseen categories in validation/test are mapped to a special code (-1) to indicate "unknown"
@@ -138,12 +138,19 @@ The model can learn to distinguish "high price + high min_nights = monthly lease
 - Concatenate `description` + `amenities` fields
 - Will be embedded using a frozen CLIP/ViLT backbone
 
-**Tabular features (normalized via min-max scaling):**
+**Tabular features (standardized via z-score scaling / StandardScaler):**
 - `room_type` (categorical: entire home/apt, private room, hotel, shared)
 - `neighbourhood_cleansed` (32 neighborhoods in Montreal)
+- `property_type` (categorical: house, apartment, condo, etc.)
+- `instant_bookable` (categorical: boolean)
 - `accommodates` (number of guests)
 - `bathrooms`, `bedrooms` (counts)
+- `beds` (count; some missing values)
+- `host_total_listings_count` (host portfolio size)
+- `latitude`, `longitude` (fine-grained location)
 - **`minimum_nights`** (critical: tells model whether listing is STR or LTR)
+- `availability_365` (days available to book in the next 365 days at scrape time; proxy for booking pressure/host blocking)
+- `number_of_reviews` (reputation/exposure proxy)
 
 **Image features:**
 - Downloaded via `scripts/download_images.py`
@@ -224,3 +231,54 @@ These changes were applied programmatically and persisted into the exported parq
 **Numeric distributions:** `accommodates` (1–16 guests, mean 3.86), `minimum_nights` (1–365 days, median 31). Train and test distributions closely match, confirming sound 80/20 split.
 
 **Test set comparison:** Test set has 2 neighborhoods absent from training (rare edge case). Strategy: label unknown neighborhoods as special code in encoder.
+
+---
+
+## CSV Column Audit & Feature Expansion (April 2026)
+
+We audited all raw CSV columns (79 total) to identify high-quality, low-missingness features that were not used in the initial baseline.
+
+**Chosen additional features (8):**
+- `beds` (numeric)
+- `host_total_listings_count` (numeric)
+- `latitude`, `longitude` (numeric)
+- `property_type` (categorical)
+- `instant_bookable` (categorical)
+- `availability_365` (numeric)
+- `number_of_reviews` (numeric)
+
+**Data completeness across all 3 snapshots (29,059 rows):**
+- `latitude`, `longitude`, `property_type`, `instant_bookable`, `availability_365`, `number_of_reviews`: 0% missing
+- `host_total_listings_count`: ~0.02% missing
+- `beds`: ~9.82% missing (handled via train-median imputation)
+
+**Rationale:**
+- Geo coordinates improve location signal beyond neighborhood labels.
+- Host/listing and booking fields (`host_total_listings_count`, `instant_bookable`, `availability_365`) help capture supply/demand and host strategy.
+- `property_type` adds structural information not captured by `room_type`.
+- Reviews are a strong prior for demand and listing maturity.
+
+---
+
+## Tabular Results: Before vs. After Feature Expansion (April 2026)
+
+This section is the permanent record of the tabular-only experiments so we can clearly cite performance changes when expanding the feature set.
+
+**Experiment A — Baseline feature set (7 features):**
+- Features: `room_type`, `neighbourhood_cleansed`, `accommodates`, `bathrooms`, `bedrooms`, `minimum_nights`, `season_ordinal`
+- Source: logged runs in `outputs/model_runs.csv` (timestamps 2026-04-11T02:12 and 2026-04-11T02:20)
+
+**Experiment B — Expanded feature set (15 features = baseline + 8 new):**
+- Added: `beds`, `host_total_listings_count`, `latitude`, `longitude`, `property_type`, `instant_bookable`, `availability_365`, `number_of_reviews`
+- Source: training output from `scripts/train_tabular_models.py` on 2026-04-11 (normal and cleaned variants)
+
+**Best model comparison (by Test R² in raw dollars):**
+
+| Experiment | Dataset variant | Best model | Test RMSE ($) | Test MAE ($) | Test R² |
+|---|---|---|---:|---:|---:|
+| A (7 features) | normal | LightGBM (num_leaves=15, lr=0.1, n_est=200) | 169.17 | 62.48 | 0.3995 |
+| A (7 features) | cleaned (price <= $5000) | LightGBM (num_leaves=50, lr=0.1, n_est=200) | 186.67 | 56.05 | 0.2298 |
+| B (15 features) | normal | LightGBM (num_leaves=100, lr=0.1, n_est=200) | 144.46 | 49.67 | 0.5621 |
+| B (15 features) | cleaned (price <= $5000) | LightGBM (num_leaves=50, lr=0.1, n_est=200) | 175.51 | 49.00 | 0.3192 |
+
+**Takeaway:** Adding the 8 high-quality CSV features materially improved the normal-dataset LightGBM performance (RMSE down, R² up). The cleaned variant still underperforms the normal variant, but it also improved relative to its own 7-feature baseline.

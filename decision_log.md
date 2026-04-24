@@ -21,6 +21,39 @@ A lightweight journal for all data and modeling decisions.
 
 ## Entries
 
+## 2026-04-11 — Cleaned vs. normal dataset (price cap $5000)
+- **Context:** Extreme nightly prices likely include mislabeled monthly-rate listings and other outliers. We tested whether filtering out very high prices improves generalization.
+- **Decision:** Keep the **normal** dataset as the primary training/evaluation dataset. Continue exporting a **cleaned** variant (price <= $5000) for comparison, but do not treat it as the default.
+- **Reasoning:** In the full-model-suite comparison (same split strategy, same preprocessing, same model grid), the cleaned variant reduced test performance vs. normal.
+- **Impacted files:**
+  - `scripts/data_processor.py` (dual export: default + `_cleaned`)
+  - `scripts/train_tabular_models.py` (dual training runs, `dataset_variant` logging)
+  - `outputs/model_runs.csv` (run log)
+- **Validation:**
+  - Normal (best: LightGBM): Test R² ≈ 0.3995, RMSE ≈ $169.17
+  - Cleaned (best: LightGBM): Test R² ≈ 0.2298, RMSE ≈ $186.67
+- **Next action:** Focus further effort on feature expansion rather than price-capping.
+
+
+## 2026-04-11 — Expand tabular feature set from CSV audit
+- **Context:** The initial feature set was small and likely under-utilized high-quality columns available in the raw InsideAirbnb CSVs.
+- **Decision:** Add the following features to the tabular pipeline:
+  - Numeric: `beds`, `host_total_listings_count`, `latitude`, `longitude`, `availability_365`, `number_of_reviews`
+  - Categorical: `property_type`, `instant_bookable`
+- **Reasoning:** These columns are high-completeness, high-signal candidates:
+  - Location (`latitude`, `longitude`) is a strong proxy for neighborhood desirability beyond coarse neighborhood labels.
+  - Supply/demand and host characteristics (`availability_365`, `host_total_listings_count`, `instant_bookable`) capture market dynamics.
+  - `property_type` adds important structure beyond `room_type`.
+  - Review counts proxy reputation and exposure.
+- **Impacted files:**
+  - `scripts/data_processor.py` (load + preprocess new columns; train-only fitting for encoders/scalers)
+  - `scripts/train_tabular_models.py` (train models on the expanded feature set; MLP updated to embed additional categoricals)
+  - `reports/report.md` (document the audit and final feature list)
+- **Validation:**
+  - Data quality across all raw CSV rows (29,059): `latitude/longitude/property_type/instant_bookable/availability_365/number_of_reviews` are 0% missing; `host_total_listings_count` is ~0.02% missing; `beds` is ~9.82% missing (imputed from train medians).
+  - Unit tests: `pytest` passes (32 tests).
+- **Next action:** Retrain and record the updated test metrics for normal vs cleaned using the expanded feature set.
+
 
 ## 2026-04-05 — Implement train-validation-test split (80/10/10 instead of 80/20)
 - **Context:** TA feedback indicated that train-test split alone is insufficient for proper model development. Standard ML practice requires three splits: train (fit model + tune hyperparameters), validation (select best hyperparameters), and test (final untouched evaluation).
@@ -109,3 +142,21 @@ A lightweight journal for all data and modeling decisions.
 - **Impacted files:** `decision_log.md`, `README.md`.
 - **Validation:** Decision log template and first workflow entry created.
 - **Next action:** Add a new log entry for each preprocessing or feature-engineering change.
+
+## Architectural & Methodological Decisions (Phase 2: Deep Learning)
+
+### 1. Training Architecture & Adaptation
+* **Decision:** Implement a progressive adaptation strategy: Feature Extraction (Baseline) $\rightarrow$ LoRA $\rightarrow$ Full Fine-Tuning (Text only).
+* **Rationale:** To rigorously quantify the trade-off between computational cost and accuracy. Feature extraction provides a robust, low-VRAM baseline. LoRA will be tested to see if low-rank matrices can capture local Montreal visual/textual nuances efficiently. Finally, a single full fine-tuning run on a smaller text model will serve as an upper-bound comparison for parameter adaptation.
+
+### 2. Bilingual Text Modality (Montreal Context)
+* **Decision:** Execute a parallel ablation study comparing a Multilingual Base Model against an English-Only Model augmented with an engineered `is_french` feature.
+* **Rationale:** Montreal's listings frequently mix French and English. Relying solely on an English model creates garbage embeddings for French text. By testing both a natively multilingual backbone and a language-detection feature engineering approach, the project will determine the most computationally efficient way to handle bilingual datasets.
+
+### 3. Multimodal Fusion Strategy
+* **Decision:** Late Fusion (Concatenation).
+* **Rationale:** Simplicity and interpretability. Concatenating the embeddings (`[Tabular_Vec, Text_Vec, Image_Vec]`) into a simple MLP isolates the marginal value of each modality without introducing the complex hyperparameter tuning required by cross-attention mechanisms.
+
+### 4. Data Imbalance (The Hybrid Approach)
+* **Decision:** Apply a mild hybrid correction: Conservative physical oversampling (e.g., scaling minority classes by 2x, not 10x) combined with a moderate Weighted Loss function.
+* **Rationale:** Extreme oversampling leads to memorization, while aggressive weighted loss can destabilize gradients. A mild hybrid approach slightly increases the visibility of rare classes (like 'Shared Rooms') while gently penalizing the network for missing them, maintaining the integrity of the overall data distribution.

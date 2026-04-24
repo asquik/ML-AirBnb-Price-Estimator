@@ -237,3 +237,27 @@ Before submitting:
 - [ ] Google Drive links verified and shareable (exposes all 3 splits)
 - [ ] File is .ipynb format, well-structured
 - [ ] **Reproducibility guaranteed: seed=42, documented 80/10/10 split, encoder persistence, test set never touched during development**  
+
+## REVISED TIMELINE: PHASE 2 (The Multi-Modal Ablation Study)
+
+### **WEEK 3 (Current): Feature Extraction, Language, & Baselines**
+**Hardware target:** 4GB GPU Server (Xeon W3680)
+
+* [ ] **Data Prep:** Resize all images to 224x224 to reduce storage footprint.
+* [ ] **Imbalance Hybrid Script:** Implement the mild physical oversampling (2x minority classes) and compute class weights for the PyTorch loss function.
+* [ ] **Feature Extraction (Pass 1):** Run `distilbert-base-multilingual-cased` and CLIP over the dataset. Save output vectors as `.npy` or `.pt`.
+* [ ] **Language Engineering:** Generate the `is_french` tabular column using a language detection script. Run standard English BERT over the text to save the English-only embeddings.
+* [ ] **Fusion Training:** Train the Late Fusion MLP head on the extracted vectors. Compare: (Tabular) vs. (Tab + Text) vs. (Tab + Image) vs. (All).
+
+### **WEEK 4: Parameter-Efficient Fine Tuning (PEFT) & Escalation**
+**Hardware target:** 6GB GPU Laptop (Primary) & Google Colab (Fallback)
+
+* [ ] **LoRA Implementation:** Use Hugging Face `peft` to inject LoRA adapters into the Text branch. Train on the 6GB laptop GPU. Compare RMSE against the frozen Feature Extraction baseline.
+* [ ] **LoRA Implementation (Image):** Apply LoRA to the CLIP vision encoder. Compare against the frozen baseline.
+* [ ] **The Full Fine-Tune Test:** Attempt unfreezing all layers on a smaller text model (e.g., `distilbert`) on the 6GB GPU to establish the "maximum compute" accuracy ceiling.
+* [ ] **(Optional/Stretch) Colab Escalation:** If time permits, push the notebook to Google Colab and attempt simultaneous LoRA fine-tuning on both image and text branches.
+
+### **WEEK 5: Final Submission Notebook Compilation**
+* [ ] Consolidate the findings into the final Jupyter Notebook.
+* [ ] Structure the narrative: Explain the hybrid imbalance strategy, compare the language handling techniques, and present the Feature Extraction vs. LoRA vs. Fine-Tuning matrix.
+* [ ] QA the notebook in a fresh virtual environment to guarantee reproducibility for the grader.

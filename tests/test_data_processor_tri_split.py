@@ -222,6 +222,33 @@ class TestTriSplitParquetExports:
             "room_type not encoded in test_tabular"
 
 
+class TestTaggedExports:
+    """Test optional tagged export outputs (e.g., cleaned datasets) are created."""
+
+    def test_split_and_export_with_tag_creates_suffixed_files(self, numeric_test_data_dir_tri_split, tmp_path):
+        output_dir = tmp_path / "output"
+        processor = AirbnbDataProcessor(
+            data_dir=numeric_test_data_dir_tri_split,
+            output_dir=output_dir
+        )
+
+        processor.split_and_export(max_price=5000, file_tag="cleaned")
+
+        required_files = [
+            "train_cleaned.parquet",
+            "val_cleaned.parquet",
+            "test_cleaned.parquet",
+            "train_tabular_cleaned.parquet",
+            "val_tabular_cleaned.parquet",
+            "test_tabular_cleaned.parquet",
+            "price_transformer_cleaned.joblib",
+            "tabular_encoders_cleaned.joblib",
+        ]
+
+        for fname in required_files:
+            assert (output_dir / fname).exists(), f"Expected tagged artifact not found: {fname}"
+
+
 class TestEncoderNoLeakage:
     """Test that encoders are fit on train set only (critical for preventing data leakage)."""
     
@@ -250,6 +277,11 @@ class TestEncoderNoLeakage:
     def test_unseen_categories_in_val_mapped_to_minus_one(self, tmp_path):
         """Verify validation/test categories not seen in training map to -1."""
         base_columns = {col: "mock" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
+
+        processor = AirbnbDataProcessor(
+            data_dir=tmp_path,
+            output_dir=tmp_path / "output"
+        )
         
         # Create deliberately mismatched data for train vs val/test
         train_rows = [
@@ -269,9 +301,10 @@ class TestEncoderNoLeakage:
         
         df_train = pd.DataFrame(train_rows)
         df_val = pd.DataFrame(val_test_rows)
+        df_test = df_val.copy()
         
         # Preprocess: train encoder should only see "Entire home/apt"
-        train_prep, val_prep, encoders = processor.preprocess_tabular(df_train, df_val)
+        train_prep, val_prep, _test_prep, encoders = processor.preprocess_tabular(df_train, df_val, df_test)
         
         # Check that unseen "Hotel room" becomes -1 in validation
         assert (val_prep['room_type'] == -1).all(), \
@@ -367,8 +400,10 @@ class TestNumericFeatureScaling:
         for col in numeric_cols:
             assert abs(train_means[col]) < 1.0, \
                 f"Train {col} mean {train_means[col]:.4f} not close to 0"
-            assert 0.8 < train_stds[col] < 1.2, \
-                f"Train {col} std {train_stds[col]:.4f} not close to 1"
+            # Some synthetic fixtures may produce constant columns (std=0); StandardScaler will output zeros.
+            if train_stds[col] != 0:
+                assert 0.8 < train_stds[col] < 1.2, \
+                    f"Train {col} std {train_stds[col]:.4f} not close to 1"
         
         # Val mean and std should NOT be 0 and 1
         # (because scaler was fit on train, val gets different statistics)
