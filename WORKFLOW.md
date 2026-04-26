@@ -261,3 +261,63 @@ Before submitting:
 * [ ] Consolidate the findings into the final Jupyter Notebook.
 * [ ] Structure the narrative: Explain the hybrid imbalance strategy, compare the language handling techniques, and present the Feature Extraction vs. LoRA vs. Fine-Tuning matrix.
 * [ ] QA the notebook in a fresh virtual environment to guarantee reproducibility for the grader.
+
+---
+
+## Agent Execution Ledger (April 2026)
+
+This section is the explicit record of experimental scripts/actions completed in-repo so they can be consolidated into a reproducible notebook and reduced script set.
+
+### Completed / Updated Scripts
+
+- `scripts/preprocess_images.py`
+  - Center-crop + resize to 224x224.
+  - One representative image per listing ID, deterministic selection.
+  - Parallel processing for CPU throughput.
+
+- `scripts/extract_vision_features.py`
+  - CLIP vision embedding extraction (`openai/clip-vit-base-patch32`).
+  - Outputs: `*_clip_vision.npy` + `*_clip_ids.csv`.
+  - Important nuance: embeddings are image-level and must be aggregated to listing-level for listing-level price prediction.
+
+- `scripts/extract_text_features.py`
+  - DistilBERT multilingual text embedding extraction.
+  - Input text includes both description and amenities: `description [SEP] amenities`.
+  - Refactored for stable RAM usage via memory-mapped output writes and lazy tokenization.
+  - Outputs: `*_distilbert-base-multilingual-cased.npy` + `*_distilbert-base-multilingual-cased_ids.csv`.
+
+- `scripts/language_engineering.py`
+  - Adds `is_french` feature via language detection for optional bilingual tabular experimentation.
+
+- `scripts/train_multimodal_models.py`
+  - Trains and logs:
+    - Text-only MLP (DistilBERT)
+    - Image+Text fusion MLP (CLIP+DistilBERT)
+    - Tabular+Image+Text fusion MLP (full late fusion)
+  - Uses `ExperimentTracker` for checkpoints/history/learning curves in `outputs/models/`.
+  - Writes metrics to `outputs/model_runs.csv`.
+  - Includes listing-level CLIP aggregation by ID (mean over all listing images).
+
+### Repository Hygiene Actions Applied
+
+- Added `extraction_log.txt` to `.gitignore` (transient runtime artifact).
+- Kept generated artifacts (`data/`, `images/`, `outputs/`) ignored for reproducibility-focused git history.
+
+### Consolidation Target (for final notebook-first workflow)
+
+To simplify reruns and QA, collapse into three primary scripts plus notebook orchestration:
+
+1. **Data processing script**
+   - Raw ingest/clean/split (train/val/test), tabular preprocess artifacts, optional language feature.
+
+2. **Model training script**
+   - Deterministic runner for baseline, text, image, and fusion variants with shared evaluation protocol.
+
+3. **Progress/reporting script**
+   - Collect run metrics, curves, checkpoints, and produce a single summary table/plots consumed by notebook cells.
+
+### Open Technical Notes Before Final Consolidation
+
+- Full late fusion currently needs tuning (first run had better MAE but weaker RMSE/R2 than image+text).
+- Vision-image multiplicity is now handled correctly via listing-level aggregation; preserve this in final pipeline.
+- Resume support for text extraction is still not implemented and should be added if interruption tolerance is required.

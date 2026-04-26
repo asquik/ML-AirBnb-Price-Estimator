@@ -260,6 +260,52 @@ We audited all raw CSV columns (79 total) to identify high-quality, low-missingn
 
 ---
 
+## Multimodal Training Update (April 2026)
+
+Text and vision embedding extraction completed successfully for all splits, then multimodal neural regressors were trained on `price_bc` and evaluated after inverse-transform to raw dollars.
+
+### Models Trained
+
+1. **Text-only MLP (DistilBERT embeddings)**
+2. **Image+Text Fusion MLP (CLIP + DistilBERT, late concatenation)**
+3. **Tabular+Image+Text Fusion MLP (full late fusion)**
+
+### Final Test Results (Raw Dollars)
+
+| Model | Test RMSE | Test MAE | Test R² |
+|---|---:|---:|---:|
+| Text-Only MLP (DistilBERT) | $174.98 | $72.38 | 0.0569 |
+| Image+Text Fusion MLP (CLIP+DistilBERT) | $124.43 | $62.16 | 0.0986 |
+| Tabular+Image+Text Fusion MLP | $142.33 | $58.24 | -0.1796 |
+
+### Interpretation
+
+- Adding image embeddings to text embeddings improved all primary metrics (lower RMSE/MAE, higher R²).
+- The observed gain supports the hypothesis that listing photos add predictive signal beyond textual description/amenities.
+- The first full-fusion run (tabular+image+text) reduced MAE but underperformed on RMSE/R² on test, indicating current fusion hyperparameters or scaling are not yet well calibrated.
+
+### Important Data Alignment Nuance (Fixed)
+
+- CLIP extraction produced one embedding per **image**, while tabular targets are one row per **listing**.
+- For fusion training, CLIP vectors are now aggregated to listing level by averaging all image vectors for the same listing ID.
+- This prevents repeated-target inflation (multiple rows with the same listing target), which would otherwise bias training and metrics.
+
+### Artifacts Produced
+
+- Text embeddings and IDs:
+  - `data/embeddings/train_distilbert-base-multilingual-cased.npy`
+  - `data/embeddings/train_distilbert-base-multilingual-cased_ids.csv`
+  - `data/embeddings/val_distilbert-base-multilingual-cased.npy`
+  - `data/embeddings/val_distilbert-base-multilingual-cased_ids.csv`
+  - `data/embeddings/test_distilbert-base-multilingual-cased.npy`
+  - `data/embeddings/test_distilbert-base-multilingual-cased_ids.csv`
+- Model run log:
+  - `outputs/model_runs.csv`
+- Training checkpoints and learning curves:
+  - `outputs/models/`
+
+---
+
 ## Tabular Results: Before vs. After Feature Expansion (April 2026)
 
 This section is the permanent record of the tabular-only experiments so we can clearly cite performance changes when expanding the feature set.

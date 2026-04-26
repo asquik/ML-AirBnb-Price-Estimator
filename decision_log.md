@@ -156,7 +156,3 @@ A lightweight journal for all data and modeling decisions.
 ### 3. Multimodal Fusion Strategy
 * **Decision:** Late Fusion (Concatenation).
 * **Rationale:** Simplicity and interpretability. Concatenating the embeddings (`[Tabular_Vec, Text_Vec, Image_Vec]`) into a simple MLP isolates the marginal value of each modality without introducing the complex hyperparameter tuning required by cross-attention mechanisms.
-
-### 4. Data Imbalance (The Hybrid Approach)
-* **Decision:** Apply a mild hybrid correction: Conservative physical oversampling (e.g., scaling minority classes by 2x, not 10x) combined with a moderate Weighted Loss function.
-* **Rationale:** Extreme oversampling leads to memorization, while aggressive weighted loss can destabilize gradients. A mild hybrid approach slightly increases the visibility of rare classes (like 'Shared Rooms') while gently penalizing the network for missing them, maintaining the integrity of the overall data distribution.
