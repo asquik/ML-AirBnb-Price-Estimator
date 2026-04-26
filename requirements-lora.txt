@@ -1,0 +1,11 @@
+pandas>=1.5
+numpy>=1.23
+pyarrow>=8.0
+scikit-learn>=1.1
+joblib>=1.2
+Pillow>=9.2
+tqdm>=4.64
+transformers>=4.40,<4.56
+peft>=0.10,<0.20
+accelerate>=0.27,<1.14
+sentencepiece>=0.1.97

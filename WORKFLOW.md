@@ -250,12 +250,96 @@ Before submitting:
 * [ ] **Fusion Training:** Train the Late Fusion MLP head on the extracted vectors. Compare: (Tabular) vs. (Tab + Text) vs. (Tab + Image) vs. (All).
 
 ### **WEEK 4: Parameter-Efficient Fine Tuning (PEFT) & Escalation**
-**Hardware target:** 6GB GPU Laptop (Primary) & Google Colab (Fallback)
+**Goal:** Build a custom late-fusion multimodal model with end-to-end LoRA fine-tuning on 6GB GPU.
 
-* [ ] **LoRA Implementation:** Use Hugging Face `peft` to inject LoRA adapters into the Text branch. Train on the 6GB laptop GPU. Compare RMSE against the frozen Feature Extraction baseline.
-* [ ] **LoRA Implementation (Image):** Apply LoRA to the CLIP vision encoder. Compare against the frozen baseline.
-* [ ] **The Full Fine-Tune Test:** Attempt unfreezing all layers on a smaller text model (e.g., `distilbert`) on the 6GB GPU to establish the "maximum compute" accuracy ceiling.
-* [ ] **(Optional/Stretch) Colab Escalation:** If time permits, push the notebook to Google Colab and attempt simultaneous LoRA fine-tuning on both image and text branches.
+**Architecture:** 
+- **Input:** Text (description+amenities) + Images + Tabular features
+- **Encoders (frozen + LoRA):** DistilBERT multilingual (text), CLIP (images)
+- **Tabular branch:** Linear embedding layer
+- **Late Fusion:** Concatenate embeddings → trainable MLP head → price regression
+- **Optimization:** Micro-batching (batch=4-8), Gradient Accumulation (effective batch=32), Mixed Precision (float16)
+
+**Comparison Matrix:**
+1. **Baseline (frozen encoders):** Full architecture, frozen CLIP + DistilBERT, trainable fusion MLP only
+2. **LoRA fine-tuning (end-to-end):** LoRA adapters on encoders + trainable fusion MLP simultaneously
+3. **Full fine-tune ceiling (optional):** Unfreeze DistilBERT layers + LoRA on all components (compute ceiling test)
+
+---
+
+### **WEEK 4 EXECUTION LOG (Agent 2 - LoRA Track, April 24-26)**
+
+**Objective:** Produce a reproducible end-to-end multimodal LoRA training pipeline on Node 2 (GTX 1060 6GB), with persistent runs and explicit GPU/memory diagnostics.
+
+#### **Implemented scripts (Agent 2)**
+- `scripts/lora_multimodal_trainer.py`
+  - Late-fusion architecture (text + image + tabular) with regression head
+  - Baseline mode (frozen encoders)
+  - LoRA mode (encoder adapters + trainable fusion/tabular heads)
+  - Mixed precision + gradient accumulation + batch/worker CLI args
+  - VRAM usage snapshots per phase/epoch
+  - Supports both on-the-fly preprocessing and precomputed cache mode
+- `scripts/precompute_multimodal_cache.py`
+  - Precomputes and stores training-ready arrays on disk:
+    - tokenized text (`input_ids`, `attention_mask`)
+    - decoded/resized image tensors (uint8 CHW)
+    - tabular matrix (float32)
+    - target price vector
+  - Text precompute includes:
+    - `description`
+    - `amenities`
+    - appended listing attributes (room type, neighbourhood, capacity, bathrooms/bedrooms/beds, booking/review fields, season)
+
+#### **Environment/reproducibility files (Agent 2)**
+- `requirements-lora.txt` (isolated dependency stack for LoRA experiments)
+- `requirements-minimal.txt` (fast CPU-only utility/preprocessing runs)
+- `Dockerfile` (containerized reproducibility scaffold)
+
+#### **Data processing performed for this track**
+- Verified/used deterministic `train/val/test` split artifacts (80/10/10)
+- Integrated local image store at `/mnt/nvme_data/linux_sys/ml_images/processed_224`
+- Built cache dataset under `data/cache_multimodal/` (generated artifact; do not commit)
+  - train/val/test cache successfully generated
+  - size approx. 3.7 GB
+
+#### **Runtime strategy applied**
+- Persistent execution via `nohup` + Docker (survives VS Code disconnects)
+- GPU container runtime validated (`--gpus all`)
+- Throughput tuning iterations:
+  - batch 4 -> 16 -> 32
+  - effective batch maintained via accumulation
+  - workers tuned based on shared memory stability
+  - Docker shm increased (`--shm-size=8g`) to avoid DataLoader bus errors
+
+#### **Key failures encountered and fixes applied**
+- **CPU fallback / CUDA unavailable** -> fixed by using CUDA-enabled PyTorch container image
+- **Transformers/torch compatibility gate** -> pinned compatible `transformers` range and used safetensors loading
+- **PEFT wrapper arg mismatch (`inputs_embeds`)** -> adapted multimodal forward handling + shifted to branch-level LoRA
+- **PEFT vision arg mismatch (`input_ids` sent to CLIP vision)** -> adjusted vision LoRA config to avoid NLP-style kwargs injection
+- **Cache dataset metadata bug (`tabular_cols` missing)** -> added cached tabular dimension metadata path for model init
+- **DataLoader bus error at higher batch** -> increased Docker shared memory and reduced worker pressure
+
+#### **Current outcome snapshot (latest completed run)**
+- Baseline completed
+- LoRA completed
+- Reported test RMSE improvement: approx. +2.7% vs baseline
+- Peak VRAM stayed well below 6GB limit during these configurations
+
+#### **Known caveats / next tuning targets**
+- Loss dynamics still noisy; further LR/rank/regularization tuning needed
+- Cache path reduces CPU preprocessing overhead, but additional profiling still recommended
+- Keep Agent 1 (frozen feature-extraction track) and Agent 2 (LoRA adaptation track) separated for clean ablation reporting
+
+#### **Commit guidance for Agent 2 work**
+- Commit:
+  - `scripts/lora_multimodal_trainer.py`
+  - `scripts/precompute_multimodal_cache.py`
+  - `requirements-lora.txt`
+  - `WORKFLOW.md` (this log)
+- Do not commit generated artifacts/logs:
+  - cache arrays under `data/cache_multimodal/`
+  - training logs (`*.log`)
+  - transient outputs used only for intermediate debugging
+
 
 ### **WEEK 5: Final Submission Notebook Compilation**
 * [ ] Consolidate the findings into the final Jupyter Notebook.
