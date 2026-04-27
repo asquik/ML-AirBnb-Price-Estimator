@@ -140,6 +140,7 @@ class ExperimentTracker:
         batch_size: int | None = None,
         dataloader_workers: int | None = None,
         device_used: str | None = None,
+        is_smoke_test: bool = False,
     ) -> None:
         if model_type not in VALID_MODEL_TYPES:
             raise ValueError(f"model_type '{model_type}' not in known types: {VALID_MODEL_TYPES}")
@@ -159,9 +160,11 @@ class ExperimentTracker:
         self.batch_size = batch_size
         self.dataloader_workers = dataloader_workers
         self.device_used = device_used or ("cuda:0" if (HAS_TORCH and torch.cuda.is_available()) else "cpu")
+        self.is_smoke_test = is_smoke_test
 
         ts = datetime.now().strftime("%Y%m%d_%H%M")
-        self.run_id = f"run_{ts}"
+        prefix = "SMOKE_run" if is_smoke_test else "run"
+        self.run_id = f"{prefix}_{ts}"
         folder_name = f"{self.run_id}_{model_type}"
         if run_name:
             folder_name = f"{folder_name}_{run_name}"
@@ -342,9 +345,14 @@ class ExperimentTracker:
             "notes": "",
         }
 
-        self._append_to_master_log(row)
-        print(f"\n✅ Run complete — artifacts at {self.run_dir}")
-        print(f"   test RMSE ${row['test_rmse_raw']:.2f} | MAE ${row['test_mae_raw']:.2f} | R² {row['test_r2']:.4f}")
+        if self.is_smoke_test:
+            print(f"\n✅ SMOKE TEST complete — artifacts at {self.run_dir}")
+            print(f"   (smoke test results are NOT written to master_runs_log.csv)")
+            print(f"   test RMSE ${row['test_rmse_raw']:.2f} | MAE ${row['test_mae_raw']:.2f} | R² {row['test_r2']:.4f}")
+        else:
+            self._append_to_master_log(row)
+            print(f"\n✅ Run complete — artifacts at {self.run_dir}")
+            print(f"   test RMSE ${row['test_rmse_raw']:.2f} | MAE ${row['test_mae_raw']:.2f} | R² {row['test_r2']:.4f}")
 
     # ------------------------------------------------------------------
     # Internal helpers

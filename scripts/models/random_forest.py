@@ -1,11 +1,10 @@
 """
-Decision Tree model — run #1-4 in the model registry.
+Random Forest model — runs #5-6 in the model registry.
 
 Usage:
-    python scripts/models/decision_tree.py --variant normal_raw
-    python scripts/models/decision_tree.py --variant cleaned_raw
-    python scripts/models/decision_tree.py --variant normal_bc
-    python scripts/models/decision_tree.py --variant cleaned_bc --run-name "custom_label"
+    python scripts/models/random_forest.py --variant normal_raw
+    python scripts/models/random_forest.py --variant cleaned_raw
+    python scripts/models/random_forest.py --variant normal_raw --smoke-test
 
 See Model Training Specification.md for the full data contract.
 """
@@ -13,7 +12,6 @@ See Model Training Specification.md for the full data contract.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 import time
 from pathlib import Path
@@ -21,17 +19,14 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.tree import DecisionTreeRegressor, export_text
 
-# Allow running from repo root or from scripts/
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiment_tracker import ExperimentTracker
 
 DATA_DIR = Path("data")
-OUTPUTS_DIR = Path("outputs")
 
-# Spec Section 1.2 — tabular feature columns (fixed, do not modify here)
 FEATURE_COLS = [
     "room_type", "neighbourhood_cleansed", "property_type", "instant_bookable",
     "accommodates", "bathrooms", "bedrooms", "beds", "host_total_listings_count",
@@ -40,11 +35,12 @@ FEATURE_COLS = [
 ]
 
 # Hyperparameter grid
-MAX_DEPTHS = [3, 5, 8, 12, 15, 20, 25, 30]
-MIN_SAMPLES_LEAFS = [2, 5, 10, 20, 30]
+N_ESTIMATORS_LIST = [100, 200, 400]
+MAX_DEPTHS        = [8, 15, 25, None]   # None = unlimited
+MIN_SAMPLES_LEAFS = [2, 5, 10]
 
 
-def load_data(variant: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, object | None]:
+def load_data(variant: str):
     suffix = "_cleaned" if variant.startswith("cleaned") else ""
     train_df = pd.read_parquet(DATA_DIR / f"train{suffix}_tabular.parquet")
     val_df   = pd.read_parquet(DATA_DIR / f"val{suffix}_tabular.parquet")
@@ -52,29 +48,27 @@ def load_data(variant: str) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, o
 
     price_transformer = None
     if variant.endswith("_bc"):
-        transformer_path = DATA_DIR / f"price_transformer{suffix}.joblib"
-        price_transformer = joblib.load(transformer_path)
+        price_transformer = joblib.load(DATA_DIR / f"price_transformer{suffix}.joblib")
 
     return train_df, val_df, test_df, price_transformer
 
 
-def to_raw_dollars(
-    preds: np.ndarray, price_transformer: object | None
-) -> np.ndarray:
+def to_raw_dollars(preds: np.ndarray, price_transformer) -> np.ndarray:
     if price_transformer is None:
         return preds
     return price_transformer.inverse_transform(preds.reshape(-1, 1)).ravel()
 
 
-def compute_metrics(y_true_raw: np.ndarray, y_pred_raw: np.ndarray) -> dict:
-    rmse = float(np.sqrt(mean_squared_error(y_true_raw, y_pred_raw)))
-    mae  = float(mean_absolute_error(y_true_raw, y_pred_raw))
-    r2   = float(r2_score(y_true_raw, y_pred_raw))
-    return {"rmse": rmse, "mae": mae, "r2": r2}
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    return {
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "mae":  float(mean_absolute_error(y_true, y_pred)),
+        "r2":   float(r2_score(y_true, y_pred)),
+    }
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Decision Tree model")
+    parser = argparse.ArgumentParser(description="Random Forest model")
     parser.add_argument(
         "--variant", required=True,
         choices=["normal_raw", "normal_bc", "cleaned_raw", "cleaned_bc"],
@@ -83,11 +77,11 @@ def main() -> None:
     parser.add_argument("--smoke-test", action="store_true", dest="smoke_test")
     args = parser.parse_args()
 
-    variant: str = args.variant
+    variant    = args.variant
     target_col = "price_bc" if variant.endswith("_bc") else "price"
 
     print(f"\n{'='*70}")
-    print(f"Decision Tree  |  variant={variant}  |  target={target_col}")
+    print(f"Random Forest  |  variant={variant}  |  target={target_col}")
     print(f"{'='*70}\n")
 
     # -------------------------------------------------------------------------
@@ -104,32 +98,33 @@ def main() -> None:
 
     print(f"  train={len(train_df)}  val={len(val_df)}  test={len(test_df)}")
 
-    X_train = train_df[FEATURE_COLS].to_numpy(dtype=np.float64)
-    y_train = train_df[target_col].to_numpy(dtype=np.float64)
+    X_train     = train_df[FEATURE_COLS].to_numpy(dtype=np.float64)
+    y_train     = train_df[target_col].to_numpy(dtype=np.float64)
     y_train_raw = train_df["price"].to_numpy(dtype=np.float64)
-    sw_train = train_df["sample_weight"].to_numpy(dtype=np.float64)
+    sw_train    = train_df["sample_weight"].to_numpy(dtype=np.float64)
 
-    X_val = val_df[FEATURE_COLS].to_numpy(dtype=np.float64)
-    y_val = val_df[target_col].to_numpy(dtype=np.float64)
+    X_val     = val_df[FEATURE_COLS].to_numpy(dtype=np.float64)
     y_val_raw = val_df["price"].to_numpy(dtype=np.float64)
 
-    X_test = test_df[FEATURE_COLS].to_numpy(dtype=np.float64)
+    X_test     = test_df[FEATURE_COLS].to_numpy(dtype=np.float64)
     y_test_raw = test_df["price"].to_numpy(dtype=np.float64)
 
     # -------------------------------------------------------------------------
-    # Initialize tracker (writes config.json immediately)
+    # Smoke test: collapse grid to a single fast combination
     # -------------------------------------------------------------------------
-    sweep_depths = MAX_DEPTHS[:2] if args.smoke_test else MAX_DEPTHS
-    sweep_leafs  = MIN_SAMPLES_LEAFS[:1] if args.smoke_test else MIN_SAMPLES_LEAFS
+    sweep_n_est   = [50]          if args.smoke_test else N_ESTIMATORS_LIST
+    sweep_depths  = [5]           if args.smoke_test else MAX_DEPTHS
+    sweep_leafs   = [10]          if args.smoke_test else MIN_SAMPLES_LEAFS
 
     tracker = ExperimentTracker(
-        model_type="DecisionTree",
+        model_type="RandomForest",
         modalities="tabular",
         variant=variant,
         run_name=args.run_name,
         is_smoke_test=args.smoke_test,
         config={
-            "max_depths_searched": sweep_depths,
+            "n_estimators_searched": sweep_n_est,
+            "max_depths_searched":   [str(d) for d in sweep_depths],
             "min_samples_leafs_searched": sweep_leafs,
             "feature_cols": FEATURE_COLS,
             "target_column": target_col,
@@ -137,50 +132,60 @@ def main() -> None:
     )
 
     if price_transformer is not None:
-        lam = float(price_transformer.lambdas_[0])
-        tracker.set_box_cox_lambda(lam)
+        tracker.set_box_cox_lambda(float(price_transformer.lambdas_[0]))
 
     # -------------------------------------------------------------------------
-    # Hyperparameter sweep — val set only, never touch test
+    # Hyperparameter sweep — val set only
     # -------------------------------------------------------------------------
-    print(f"\nSweeping {len(sweep_depths) * len(sweep_leafs)} configurations on val set...")
-    print(f"{'max_depth':<12} {'min_samples_leaf':<18} {'Val RMSE $':<14} {'Val MAE $':<12} {'Val R²':<8}")
-    print("-" * 68)
+    total_configs = len(sweep_n_est) * len(sweep_depths) * len(sweep_leafs)
+    print(f"\nSweeping {total_configs} configurations on val set (n_jobs=-1)...")
+    print(
+        f"{'n_est':<8} {'max_depth':<12} {'min_leaf':<10} "
+        f"{'Val RMSE $':<14} {'Val MAE $':<12} {'Val R²':<8}"
+    )
+    print("-" * 70)
 
-    best_model: DecisionTreeRegressor | None = None
+    best_model = None
     best_params: dict = {}
     best_val_rmse = float("inf")
     t0 = time.time()
 
-    for max_depth in sweep_depths:
-        for min_samples_leaf in sweep_leafs:
-            dt = DecisionTreeRegressor(
-                max_depth=max_depth,
-                min_samples_leaf=min_samples_leaf,
-                random_state=42,
-            )
-            dt.fit(X_train, y_train, sample_weight=sw_train)
+    for n_est in sweep_n_est:
+        for max_depth in sweep_depths:
+            for min_leaf in sweep_leafs:
+                rf = RandomForestRegressor(
+                    n_estimators=n_est,
+                    max_depth=max_depth,
+                    min_samples_leaf=min_leaf,
+                    n_jobs=-1,
+                    random_state=42,
+                )
+                rf.fit(X_train, y_train, sample_weight=sw_train)
 
-            val_pred_raw = to_raw_dollars(dt.predict(X_val), price_transformer)
-            val_metrics = compute_metrics(y_val_raw, val_pred_raw)
+                val_pred_raw = to_raw_dollars(rf.predict(X_val), price_transformer)
+                val_metrics  = compute_metrics(y_val_raw, val_pred_raw)
 
-            print(
-                f"{max_depth:<12} {min_samples_leaf:<18} "
-                f"{val_metrics['rmse']:<14.2f} {val_metrics['mae']:<12.2f} {val_metrics['r2']:<8.4f}"
-            )
+                depth_label = str(max_depth) if max_depth is not None else "None"
+                print(
+                    f"{n_est:<8} {depth_label:<12} {min_leaf:<10} "
+                    f"{val_metrics['rmse']:<14.2f} {val_metrics['mae']:<12.2f} {val_metrics['r2']:<8.4f}"
+                )
 
-            if val_metrics["rmse"] < best_val_rmse:
-                best_val_rmse = val_metrics["rmse"]
-                best_model = dt
-                best_params = {"max_depth": max_depth, "min_samples_leaf": min_samples_leaf}
+                if val_metrics["rmse"] < best_val_rmse:
+                    best_val_rmse = val_metrics["rmse"]
+                    best_model    = rf
+                    best_params   = {
+                        "n_estimators": n_est,
+                        "max_depth": max_depth,
+                        "min_samples_leaf": min_leaf,
+                    }
 
     training_time = (time.time() - t0) / 60
-    print("-" * 68)
-    print(f"\n✅ Best: max_depth={best_params['max_depth']}, min_samples_leaf={best_params['min_samples_leaf']}")
-    print(f"   Val RMSE: ${best_val_rmse:.2f}")
+    print("-" * 70)
+    print(f"\n✅ Best: {best_params}  |  Val RMSE: ${best_val_rmse:.2f}")
 
     # -------------------------------------------------------------------------
-    # Final evaluation on all splits — raw dollars throughout
+    # Final evaluation on all splits
     # -------------------------------------------------------------------------
     train_pred_raw = to_raw_dollars(best_model.predict(X_train), price_transformer)
     val_pred_raw   = to_raw_dollars(best_model.predict(X_val),   price_transformer)
@@ -198,28 +203,22 @@ def main() -> None:
     # -------------------------------------------------------------------------
     # Feature importance
     # -------------------------------------------------------------------------
-    importances = best_model.feature_importances_
     feature_importance = {
         col: round(float(imp), 6)
         for col, imp in sorted(
-            zip(FEATURE_COLS, importances), key=lambda x: x[1], reverse=True
+            zip(FEATURE_COLS, best_model.feature_importances_),
+            key=lambda x: x[1], reverse=True,
         )
     }
 
-    # -------------------------------------------------------------------------
-    # Finish — writes predictions.npz, feature_importance.json, appends CSV row
-    # -------------------------------------------------------------------------
     tracker.finish(
         train_metrics=train_metrics,
         val_metrics=val_metrics,
         test_metrics=test_metrics,
         predictions={
-            "train_y_true": y_train_raw,
-            "train_y_pred": train_pred_raw,
-            "val_y_true":   y_val_raw,
-            "val_y_pred":   val_pred_raw,
-            "test_y_true":  y_test_raw,
-            "test_y_pred":  test_pred_raw,
+            "train_y_true": y_train_raw, "train_y_pred": train_pred_raw,
+            "val_y_true":   y_val_raw,   "val_y_pred":   val_pred_raw,
+            "test_y_true":  y_test_raw,  "test_y_pred":  test_pred_raw,
         },
         trainable_parameters=0,
         training_time_minutes=training_time,

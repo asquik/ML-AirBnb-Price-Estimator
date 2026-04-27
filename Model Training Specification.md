@@ -106,11 +106,26 @@ Fusion and image model scripts additionally accept:
 - `*_raw` → use `price` column as target; use Huber loss for DL; no inverse transform needed for reporting
 - `*_bc` → use `price_bc` column as target; use MSE loss for DL; load the appropriate `price_transformer` and apply `inverse_transform` before computing all metrics
 
+Every script also accepts:
+```
+--smoke-test    optional flag. If passed, triggers rapid debugging mode.
+```
+
+**Smoke Test Behavior:** If `--smoke-test` is passed, the script must perform rapid debugging:
+1. Truncate all loaded data splits (train, val, test) to exactly 100 rows immediately after loading, before any other processing.
+2. Force the model to train for a maximum of 1 epoch (or a very small sweep — e.g., 2 hyperparameter combinations — for tree/sklearn models).
+3. Pass `is_smoke_test=True` into the `ExperimentTracker` initialization.
+
+**Why this flag exists:** As models grow more complex (DL, LoRA), running a full training pass to verify a script compiles and runs end-to-end is unreasonable. The smoke test flag lets the script author verify correctness — no import errors, no shape mismatches, no missing files — in seconds rather than hours. It is the mandatory verification step before handing a script over for a real training run. Smoke tests are never used to evaluate model quality; a smoke test result tells you nothing about the model's actual performance.
+
 **Example invocations:**
 ```bash
 python scripts/models/lightgbm_model.py --variant cleaned_raw --run-name "leaves128_lr001"
 python scripts/models/fusion_mlp.py --variant normal_bc --image-size 336 --run-name "head_deep256"
 python scripts/models/text_lora.py --variant normal_bc --run-name "lora_rank16"
+
+# Smoke test — verify a new script runs end-to-end without errors, no meaningful output:
+python scripts/models/fusion_lora.py --variant normal_bc --smoke-test
 ```
 
 ---
@@ -437,17 +452,18 @@ This table is the definitive list of all planned runs. Status is updated manuall
 
 ### 5.6 LoRA Fine-Tuning
 
-| # | Script | Model Type | Variant | Fusion Head | LoRA Target | LoRA Rank | Status |
-|---|---|---|---|---|---|---|---|
-| 31 | `text_lora.py` | TextLoRA | normal_bc | shallow_64 | text | 8 | planned |
-| 32 | `text_lora.py` | TextLoRA | normal_bc | shallow_64 | text | 16 | rank ablation | planned |
-| 33 | `image_lora.py` | ImageLoRA | normal_bc | shallow_64 | image | 8 | planned |
-| 34 | `image_lora.py` | ImageLoRA | normal_bc | shallow_64 | image | 16 | rank ablation | planned |
-| 35 | `fusion_lora.py` | FusionLoRA | normal_bc | shallow_64 | text+image | 8 | planned |
-| 36 | `fusion_lora.py` | FusionLoRA | normal_bc | deep_256 | text+image | 8 | head ablation | planned |
-| 37 | `fusion_lora.py` | FusionLoRA | normal_bc | shallow_64 | text+image | 16 | rank ablation | planned |
+All LoRA runs include tabular features as a third input branch. The `Modalities` column is explicit — there are no implied inputs.
 
-**Total planned runs: 37.** All are optional. Run in priority order: tree baselines first (runs 1–14), then tabular DL (15–19), then frozen backbone (20–30), then LoRA (31–37).
+| # | Script | Model Type | Variant | Fusion Head | Modalities | Image Size | Rank | Status |
+|---|---|---|---|---|---|---|---|---|
+| 31 | `fusion_lora.py` | FusionLoRA | normal_bc | deep_256 | tab+text+image | 224 | 16 | PRIORITY 1 |
+| 32 | `fusion_lora.py` | FusionLoRA | normal_bc | deep_256 | tab+text+image | 336 | 16 | PRIORITY 2 |
+| 33 | `image_lora.py` | ImageLoRA | normal_bc | deep_256 | tab+image | 336 | 16 | ablation |
+| 34 | `text_lora.py` | TextLoRA | normal_bc | deep_256 | tab+text | n/a | 16 | ablation |
+| 35 | `fusion_lora.py` | FusionLoRA | normal_bc | shallow_64 | tab+text+image | 336 | 16 | head ablation |
+| 36 | `fusion_lora.py` | FusionLoRA | normal_bc | deep_256 | tab+text+image | 336 | 8 | rank ablation |
+
+**Total planned runs: 36.** Execution order reversed from original plan — LoRA runs first (highest compute value), tree/sklearn baselines second (written while GPU trains). All runs are optional; skip any that exceed compute budget.
 
 ---
 
@@ -497,6 +513,13 @@ tracker.finish(
 ```
 
 All metrics passed to `tracker.finish()` must already be in raw Canadian dollars. The tracker performs no transformation — it trusts the training script to have done the inverse transform before calling `finish()`.
+
+**Smoke Test Handling:** If the tracker is initialized with `is_smoke_test=True`, it must:
+1. Prepend `SMOKE_` to the `run_id` and folder name (e.g., `SMOKE_run_20260427_1430_FusionLoRA`).
+2. **Skip** appending the final row to `outputs/master_runs_log.csv`. The master ledger must never contain smoke test rows.
+3. It may still save `config.json` and `predictions.npz` in the smoke test folder for debugging purposes — these are useful for inspecting shapes and values if something is wrong.
+
+The smoke test folder is disposable. Do not commit it. Delete it once you have confirmed the script runs correctly.
 
 ---
 
