@@ -7,7 +7,7 @@ from PIL import Image
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from scripts.new_image_processor import (
+from scripts.image_processor import (
     create_neutral_placeholder,
     find_raw_image_path,
     is_image_readable,

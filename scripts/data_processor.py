@@ -1,410 +1,570 @@
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import PowerTransformer, LabelEncoder, StandardScaler
-import joblib
-from pathlib import Path
-from typing import Tuple, Dict, Optional
+from __future__ import annotations
 
-class AirbnbDataProcessor:
-    """
-    A unified data processor that loads raw Airbnb monthly snapshots,
-    applies universal cleaning rules, splits into deterministic train/test sets,
-    and exports as compressed Parquet files.
-    
-    This ensures all downstream models (tabular, text, image, multi-modal) 
-    are evaluated on the exact same train/test split.
-    
-    Seasons are encoded ordinally to prevent spurious correlation with raw month numbers.
-    Mapping: Winter=1 (Oct-Apr), Spring=2 (Apr-Jun), Summer=3 (Jun-Oct).
-    """
-    
-    # We load a fixed set of columns used across modalities.
-    # If you add a column here, update tests and downstream training scripts accordingly.
-    REQUIRED_COLUMNS = [
-        "id",                       # Needed for split grouping & identification
-        "description",              # Text modality
-        "amenities",                # Text modality
-        "picture_url",              # Image modality
-        "room_type",                # Tabular modality
-        "neighbourhood_cleansed",   # Tabular modality
-        "accommodates",             # Tabular modality
-        "bathrooms",                # Tabular modality
-        "bedrooms",                 # Tabular modality
-        "minimum_nights",           # Tabular modality
-        # Expanded tabular feature set (April 2026)
-        "beds",
-        "host_total_listings_count",
-        "latitude",
-        "longitude",
-        "property_type",
-        "instant_bookable",
-        "availability_365",
-        "number_of_reviews",
-        "price"                     # Target variable
+import re
+from pathlib import Path
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import PowerTransformer, StandardScaler
+
+
+DEFAULT_CATEGORICAL_COLUMNS = [
+    "room_type",
+    "neighbourhood_cleansed",
+    "property_type",
+    "instant_bookable",
+]
+
+DEFAULT_NUMERIC_COLUMNS = [
+    "accommodates",
+    "bathrooms",
+    "bedrooms",
+    "beds",
+    "host_total_listings_count",
+    "latitude",
+    "longitude",
+    "minimum_nights",
+    "availability_365",
+    "number_of_reviews",
+]
+
+DEFAULT_TARGET_COLUMN = "price"
+DEFAULT_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
+DEFAULT_SAMPLE_WEIGHT_COLUMN = "sample_weight"
+DEFAULT_LISTING_ID_COLUMN = "listing_id"
+DEFAULT_SEASON_COLUMN = "season_ordinal"
+
+
+def _copy_df(df: pd.DataFrame) -> pd.DataFrame:
+    return df.copy(deep=True)
+
+
+def _as_path(path_like: Path | str) -> Path:
+    return path_like if isinstance(path_like, Path) else Path(path_like)
+
+
+def _extract_snapshot_month(file_path: Path) -> str:
+    match = re.search(r"(?:^|[-_])(\d{2})(?:[-_]|$)", file_path.stem)
+    if not match:
+        raise ValueError(f"Could not infer snapshot month from file name: {file_path.name}")
+    return match.group(1)
+
+
+def _normalize_known_category(value: object) -> Optional[str]:
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    if not text or text.lower() in {"unknown", "nan", "none", "na", "null"}:
+        return None
+    return text
+
+
+def _coerce_numeric_series(series: pd.Series) -> pd.Series:
+    return pd.to_numeric(series, errors="coerce")
+
+
+def _candidate_image_paths(listing_id: str, raw_image_dir: Path) -> List[Path]:
+    candidates: List[Path] = []
+    for extension in DEFAULT_IMAGE_EXTENSIONS:
+        candidates.append(raw_image_dir / f"{listing_id}{extension}")
+    candidates.extend(sorted(raw_image_dir.glob(f"{listing_id}.*")))
+    unique_candidates: List[Path] = []
+    seen = set()
+    for candidate in candidates:
+        candidate_key = str(candidate)
+        if candidate_key not in seen:
+            seen.add(candidate_key)
+            unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def load_raw_csvs(file_paths: list[Path]) -> pd.DataFrame:
+    """Load and concatenate raw InsideAirbnb CSV snapshots."""
+    frames: list[pd.DataFrame] = []
+    for file_path_like in file_paths:
+        file_path = _as_path(file_path_like)
+        if not file_path.exists():
+            raise FileNotFoundError(f"Expected data file not found: {file_path}")
+        frame = pd.read_csv(file_path)
+        frame = frame.copy()
+        frame["snapshot_month"] = _extract_snapshot_month(file_path)
+        frames.append(frame)
+
+    if not frames:
+        return pd.DataFrame()
+
+    return pd.concat(frames, ignore_index=True)
+
+
+def normalize_listing_id(df: pd.DataFrame, id_column: str) -> pd.DataFrame:
+    """Standardize the primary key column to listing_id."""
+    result = _copy_df(df)
+    if id_column not in result.columns:
+        if DEFAULT_LISTING_ID_COLUMN in result.columns:
+            result[DEFAULT_LISTING_ID_COLUMN] = result[DEFAULT_LISTING_ID_COLUMN].astype(str)
+            return result
+        raise KeyError(f"Missing id column: {id_column}")
+
+    result[DEFAULT_LISTING_ID_COLUMN] = result[id_column].astype(str)
+    if id_column != DEFAULT_LISTING_ID_COLUMN:
+        result = result.drop(columns=[id_column])
+    return result
+
+
+def clean_price_column(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert the price column into numeric dollars."""
+    result = _copy_df(df)
+    result[DEFAULT_TARGET_COLUMN] = (
+        result[DEFAULT_TARGET_COLUMN]
+        .astype(str)
+        .str.replace("$", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.strip()
+    )
+    result[DEFAULT_TARGET_COLUMN] = pd.to_numeric(result[DEFAULT_TARGET_COLUMN], errors="coerce")
+    return result
+
+
+def drop_missing_price_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove rows with missing, invalid, or non-positive price values."""
+    result = _copy_df(df)
+    result = result.dropna(subset=[DEFAULT_TARGET_COLUMN])
+    result = result[result[DEFAULT_TARGET_COLUMN] > 0].copy()
+    return result
+
+
+def add_season_ordinal(df: pd.DataFrame, month_column: str) -> pd.DataFrame:
+    """Map snapshot months to a fixed ordinal season label."""
+    month_to_season = {"03": 1, "3": 1, "06": 2, "6": 2, "09": 3, "9": 3}
+    result = _copy_df(df)
+
+    def _map_month(value: object) -> int:
+        month_token = str(value).strip()
+        if month_token not in month_to_season:
+            raise ValueError(f"Unsupported snapshot month value: {value}")
+        return month_to_season[month_token]
+
+    result[DEFAULT_SEASON_COLUMN] = result[month_column].map(_map_month).astype(int)
+    return result
+
+
+def create_full_text_column(df: pd.DataFrame, description_column: str, amenities_column: str) -> pd.DataFrame:
+    """Concatenate description and amenities using the fixed separator token."""
+    result = _copy_df(df)
+    description = result[description_column].fillna("").astype(str).str.strip()
+    amenities = result[amenities_column].fillna("").astype(str).str.strip()
+    result["full_text"] = (description + " [SEP] " + amenities).str.strip()
+    return result
+
+
+def fit_language_detector(description_series: pd.Series) -> dict[str, object]:
+    """Learn a lightweight French detection rule from the training descriptions."""
+    text = " ".join(description_series.fillna("").astype(str).tolist()).lower()
+    markers = {
+        " le ",
+        " la ",
+        " les ",
+        " des ",
+        " une ",
+        " un ",
+        " appartement ",
+        " centre ",
+        " avec ",
+        " très ",
+        " proche ",
+        " lumineux ",
+    }
+    accent_chars = "àâçéèêëîïôùûüÿœæ"
+    if text:
+        discovered = {marker for marker in markers if marker.strip() in text}
+    else:
+        discovered = set()
+    return {
+        "markers": sorted(discovered or markers),
+        "accent_chars": accent_chars,
+    }
+
+
+def apply_language_detector(
+    df: pd.DataFrame,
+    language_detector_artifact: dict[str, object],
+    description_column: str,
+) -> pd.DataFrame:
+    """Flag rows whose descriptions are likely French."""
+    result = _copy_df(df)
+    markers = [str(marker) for marker in language_detector_artifact.get("markers", [])]
+    accent_chars = str(language_detector_artifact.get("accent_chars", ""))
+
+    def _is_french(text: object) -> bool:
+        normalized = f" {str(text).lower()} "
+        if any(marker in normalized for marker in markers):
+            return True
+        return any(character in normalized for character in accent_chars)
+
+    result["is_french"] = result[description_column].map(_is_french).astype(bool)
+    return result
+
+
+def mark_image_availability(
+    df: pd.DataFrame,
+    raw_image_dir: Path,
+    listing_id_column: str,
+) -> pd.DataFrame:
+    """Set a boolean flag when a raw listing image exists on disk."""
+    result = _copy_df(df)
+    raw_image_dir = _as_path(raw_image_dir)
+
+    def _has_image(listing_id: object) -> bool:
+        listing_token = str(listing_id)
+        for candidate in _candidate_image_paths(listing_token, raw_image_dir):
+            if candidate.exists() and candidate.is_file():
+                return True
+        return False
+
+    result["has_valid_image"] = result[listing_id_column].map(_has_image).astype(bool)
+    return result
+
+
+def split_data_80_10_10(df: pd.DataFrame, seed: int) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Deterministically split the dataframe into train, validation, and test partitions."""
+    if DEFAULT_LISTING_ID_COLUMN not in df.columns:
+        raise KeyError(f"Missing required split key column: {DEFAULT_LISTING_ID_COLUMN}")
+
+    working_df = _copy_df(df)
+    unique_ids = pd.Index(working_df[DEFAULT_LISTING_ID_COLUMN].astype(str).dropna().unique())
+    shuffled_ids = np.array(unique_ids, dtype=object)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(shuffled_ids)
+
+    total_ids = len(shuffled_ids)
+    if total_ids == 0:
+        empty = working_df.iloc[0:0].copy()
+        return empty, empty.copy(), empty.copy()
+
+    raw_counts = np.array([0.8, 0.1, 0.1], dtype=float) * total_ids
+    counts = np.floor(raw_counts).astype(int)
+    remainder = total_ids - int(counts.sum())
+    if remainder > 0:
+        fractional_parts = raw_counts - counts
+        order = np.argsort(-fractional_parts)
+        for index in order[:remainder]:
+            counts[index] += 1
+
+    train_count, val_count, test_count = counts.tolist()
+    train_ids = shuffled_ids[:train_count]
+    val_ids = shuffled_ids[train_count : train_count + val_count]
+    test_ids = shuffled_ids[train_count + val_count : train_count + val_count + test_count]
+
+    train_df = working_df[working_df[DEFAULT_LISTING_ID_COLUMN].astype(str).isin(set(train_ids))].copy()
+    val_df = working_df[working_df[DEFAULT_LISTING_ID_COLUMN].astype(str).isin(set(val_ids))].copy()
+    test_df = working_df[working_df[DEFAULT_LISTING_ID_COLUMN].astype(str).isin(set(test_ids))].copy()
+
+    return train_df, val_df, test_df
+
+
+def fit_box_cox_transformer(target_series: pd.Series) -> PowerTransformer:
+    """Learn the Box-Cox parameters from the training target only."""
+    numeric_target = _coerce_numeric_series(target_series).dropna()
+    if numeric_target.empty:
+        raise ValueError("Box-Cox fitting requires at least one positive target value")
+    if (numeric_target <= 0).any():
+        raise ValueError("Box-Cox fitting requires strictly positive targets")
+    transformer = PowerTransformer(method="box-cox", standardize=False)
+    transformer.fit(numeric_target.to_numpy().reshape(-1, 1))
+    return transformer
+
+
+def apply_box_cox_transformer(target_series: pd.Series, box_cox_transformer: PowerTransformer) -> pd.Series:
+    """Transform the target into Box-Cox space using the fitted transformer."""
+    numeric_target = _coerce_numeric_series(target_series)
+    if numeric_target.empty:
+        return pd.Series(dtype=float, index=target_series.index, name=target_series.name)
+    transformed = box_cox_transformer.transform(numeric_target.to_numpy().reshape(-1, 1)).ravel()
+    return pd.Series(transformed, index=target_series.index, name=target_series.name)
+
+
+def fit_numeric_imputer(train_df: pd.DataFrame, numeric_columns: list[str]) -> Dict[str, float]:
+    """Learn train-set medians for numeric missing-value imputation."""
+    medians: Dict[str, float] = {}
+    for column in numeric_columns:
+        numeric_values = _coerce_numeric_series(train_df[column])
+        median_value = float(numeric_values.median()) if not numeric_values.dropna().empty else 0.0
+        if pd.isna(median_value):
+            median_value = 0.0
+        medians[column] = median_value
+    return medians
+
+
+def apply_numeric_imputer(
+    df: pd.DataFrame,
+    numeric_imputer_artifact: Dict[str, float],
+    numeric_columns: list[str],
+) -> pd.DataFrame:
+    """Fill missing numeric values with train medians."""
+    result = _copy_df(df)
+    for column in numeric_columns:
+        result[column] = _coerce_numeric_series(result[column]).fillna(numeric_imputer_artifact[column])
+    return result
+
+
+def fit_categorical_encoder(train_df: pd.DataFrame, categorical_columns: list[str]) -> Dict[str, Dict[str, int]]:
+    """Build train-only category vocabularies with 0 reserved for unknown values."""
+    encoders: Dict[str, Dict[str, int]] = {}
+    for column in categorical_columns:
+        values = []
+        for value in train_df[column]:
+            normalized = _normalize_known_category(value)
+            if normalized is not None:
+                values.append(normalized)
+        unique_values = sorted(set(values))
+        encoders[column] = {value: index + 1 for index, value in enumerate(unique_values)}
+    return encoders
+
+
+def apply_categorical_encoder(
+    df: pd.DataFrame,
+    categorical_encoder_artifact: Dict[str, Dict[str, int]],
+    categorical_columns: list[str],
+) -> pd.DataFrame:
+    """Convert categorical values to integer ids using train vocabularies."""
+    result = _copy_df(df)
+    for column in categorical_columns:
+        mapping = categorical_encoder_artifact[column]
+        encoded = result[column].map(lambda value: mapping.get(_normalize_known_category(value), 0))
+        result[column] = encoded.fillna(0).astype(int)
+    return result
+
+
+def fit_numeric_scaler(train_df: pd.DataFrame, numeric_columns: list[str]) -> StandardScaler:
+    """Learn train-only numeric scaling parameters."""
+    scaler = StandardScaler()
+    numeric_frame = train_df[numeric_columns].apply(_coerce_numeric_series)
+    scaler.fit(numeric_frame)
+    return scaler
+
+
+def apply_numeric_scaler(
+    df: pd.DataFrame,
+    numeric_scaler_artifact: StandardScaler,
+    numeric_columns: list[str],
+) -> pd.DataFrame:
+    """Scale numeric features using the train-fitted scaler."""
+    result = _copy_df(df)
+    numeric_frame = result[numeric_columns].apply(_coerce_numeric_series)
+    if len(numeric_frame) == 0:
+        return result
+    transformed = numeric_scaler_artifact.transform(numeric_frame)
+    transformed_frame = pd.DataFrame(transformed, columns=numeric_columns, index=result.index)
+    for column in numeric_columns:
+        result[column] = transformed_frame[column].astype(float)
+    return result
+
+
+def fit_room_type_weights(train_df: pd.DataFrame, room_type_column: str) -> Dict[str, float]:
+    """Compute inverse-frequency weights for each room type from training data only."""
+    room_type_series = train_df[room_type_column].map(_normalize_known_category)
+    room_type_series = room_type_series.dropna()
+    counts = room_type_series.value_counts(dropna=True)
+    total_rows = float(len(room_type_series))
+    unique_count = float(len(counts)) if len(counts) else 1.0
+    return {room_type: total_rows / (unique_count * float(count)) for room_type, count in counts.items()}
+
+
+def apply_room_type_weights(
+    df: pd.DataFrame,
+    room_type_weight_map: Dict[str, float],
+    room_type_column: str,
+) -> pd.DataFrame:
+    """Assign a per-row sample weight using the learned room-type frequency map."""
+    result = _copy_df(df)
+    default_weight = float(np.mean(list(room_type_weight_map.values()))) if room_type_weight_map else 1.0
+    result[DEFAULT_SAMPLE_WEIGHT_COLUMN] = result[room_type_column].map(
+        lambda value: room_type_weight_map.get(_normalize_known_category(value), default_weight)
+    ).astype(float)
+    return result
+
+
+def assemble_tabular_output(
+    df: pd.DataFrame,
+    target_columns: list[str],
+    feature_columns: list[str],
+) -> pd.DataFrame:
+    """Select and order the final columns for tabular export."""
+    priority_columns = [
+        DEFAULT_LISTING_ID_COLUMN,
+        *target_columns,
+        DEFAULT_SAMPLE_WEIGHT_COLUMN,
+        "has_valid_image",
+        "is_french",
+        "full_text",
+        *feature_columns,
+    ]
+    ordered_columns: List[str] = []
+    for column in priority_columns:
+        if column in df.columns and column not in ordered_columns:
+            ordered_columns.append(column)
+    return _copy_df(df[ordered_columns])
+
+
+def filter_cleaned_variant(df: pd.DataFrame, max_price: float = 1000) -> pd.DataFrame:
+    """Remove rows with prices outside the strict cleaned comparison band."""
+    result = _copy_df(df)
+    return result[result[DEFAULT_TARGET_COLUMN].between(50, max_price, inclusive="both")].copy()
+
+
+def save_parquet(df: pd.DataFrame, output_path: Path) -> None:
+    """Persist a dataframe to parquet without changing row order."""
+    output_path = _as_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(output_path, compression="gzip", index=False)
+
+
+def save_artifact(artifact: object, output_path: Path) -> None:
+    """Persist a fitted preprocessing artifact for reuse."""
+    output_path = _as_path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(artifact, output_path)
+
+
+def build_base_frame(file_paths: list[Path], raw_image_dir: Path) -> tuple[pd.DataFrame, dict[str, object]]:
+    """Create the shared raw dataframe used by both the normal and cleaned variants."""
+    raw_df = load_raw_csvs(file_paths)
+    raw_df = normalize_listing_id(raw_df, id_column="id")
+    raw_df = clean_price_column(raw_df)
+    raw_df = drop_missing_price_rows(raw_df)
+    raw_df = add_season_ordinal(raw_df, month_column="snapshot_month")
+    raw_df = create_full_text_column(raw_df, description_column="description", amenities_column="amenities")
+    language_detector_artifact = fit_language_detector(raw_df["description"])
+    raw_df = apply_language_detector(raw_df, language_detector_artifact, description_column="description")
+    raw_df = mark_image_availability(raw_df, raw_image_dir=raw_image_dir, listing_id_column=DEFAULT_LISTING_ID_COLUMN)
+    return raw_df, {"language_detector": language_detector_artifact}
+
+
+def _split_and_export_variant(
+    variant_df: pd.DataFrame,
+    output_dir: Path,
+    file_tag: Optional[str],
+) -> dict[str, object]:
+    train_df, val_df, test_df = split_data_80_10_10(variant_df, seed=42)
+
+    room_type_weight_map = fit_room_type_weights(train_df, room_type_column="room_type")
+    box_cox_transformer = fit_box_cox_transformer(train_df[DEFAULT_TARGET_COLUMN])
+    numeric_imputer_artifact = fit_numeric_imputer(train_df, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+
+    train_df = apply_numeric_imputer(train_df, numeric_imputer_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+    val_df = apply_numeric_imputer(val_df, numeric_imputer_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+    test_df = apply_numeric_imputer(test_df, numeric_imputer_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+
+    numeric_scaler_artifact = fit_numeric_scaler(train_df, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+    train_df = apply_numeric_scaler(train_df, numeric_scaler_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+    val_df = apply_numeric_scaler(val_df, numeric_scaler_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+    test_df = apply_numeric_scaler(test_df, numeric_scaler_artifact, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
+
+    categorical_encoder_artifact = fit_categorical_encoder(train_df, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
+
+    train_df["price_bc"] = apply_box_cox_transformer(train_df[DEFAULT_TARGET_COLUMN], box_cox_transformer)
+    val_df["price_bc"] = apply_box_cox_transformer(val_df[DEFAULT_TARGET_COLUMN], box_cox_transformer)
+    test_df["price_bc"] = apply_box_cox_transformer(test_df[DEFAULT_TARGET_COLUMN], box_cox_transformer)
+
+    train_df = apply_room_type_weights(train_df, room_type_weight_map, room_type_column="room_type")
+    val_df = apply_room_type_weights(val_df, room_type_weight_map, room_type_column="room_type")
+    test_df = apply_room_type_weights(test_df, room_type_weight_map, room_type_column="room_type")
+
+    train_df = apply_categorical_encoder(train_df, categorical_encoder_artifact, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
+    val_df = apply_categorical_encoder(val_df, categorical_encoder_artifact, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
+    test_df = apply_categorical_encoder(test_df, categorical_encoder_artifact, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
+
+    feature_columns = [
+        *DEFAULT_CATEGORICAL_COLUMNS,
+        *DEFAULT_NUMERIC_COLUMNS,
+        DEFAULT_SEASON_COLUMN,
     ]
 
-    # Seasonal mapping: month strings (from filename) → ordinal season codes
-    MONTH_TO_SEASON = {
-        "03": 1,  # March → Winter (October-April)
-        "06": 2,  # June → Spring (April-June)
-        "09": 3,  # September → Summer (June-October)
+    train_tabular = assemble_tabular_output(
+        train_df,
+        target_columns=[DEFAULT_TARGET_COLUMN, "price_bc"],
+        feature_columns=feature_columns,
+    )
+    val_tabular = assemble_tabular_output(
+        val_df,
+        target_columns=[DEFAULT_TARGET_COLUMN, "price_bc"],
+        feature_columns=feature_columns,
+    )
+    test_tabular = assemble_tabular_output(
+        test_df,
+        target_columns=[DEFAULT_TARGET_COLUMN, "price_bc"],
+        feature_columns=feature_columns,
+    )
+
+    suffix = "" if not file_tag else f"_{file_tag}"
+
+    save_parquet(train_df, output_dir / f"train{suffix}.parquet")
+    save_parquet(val_df, output_dir / f"val{suffix}.parquet")
+    save_parquet(test_df, output_dir / f"test{suffix}.parquet")
+    save_parquet(train_tabular, output_dir / f"train{suffix}_tabular.parquet")
+    save_parquet(val_tabular, output_dir / f"val{suffix}_tabular.parquet")
+    save_parquet(test_tabular, output_dir / f"test{suffix}_tabular.parquet")
+
+    save_artifact(box_cox_transformer, output_dir / f"price_transformer{suffix}.joblib")
+    save_artifact(numeric_imputer_artifact, output_dir / f"numeric_imputer{suffix}.joblib")
+    save_artifact(categorical_encoder_artifact, output_dir / f"tabular_encoders{suffix}.joblib")
+    save_artifact(numeric_scaler_artifact, output_dir / f"numeric_scaler{suffix}.joblib")
+    save_artifact(room_type_weight_map, output_dir / f"room_type_weights{suffix}.joblib")
+
+    return {
+        "train_df": train_df,
+        "val_df": val_df,
+        "test_df": test_df,
+        "train_tabular": train_tabular,
+        "val_tabular": val_tabular,
+        "test_tabular": test_tabular,
+        "artifacts": {
+            "box_cox_transformer": box_cox_transformer,
+            "numeric_imputer": numeric_imputer_artifact,
+            "categorical_encoder": categorical_encoder_artifact,
+            "numeric_scaler": numeric_scaler_artifact,
+            "room_type_weight_map": room_type_weight_map,
+        },
     }
-    SEASON_NAMES = {1: "Winter", 2: "Spring", 3: "Summer"}
 
-    def __init__(self, data_dir: str, output_dir: str = None):
-        self.data_dir = Path(data_dir)
-        self.output_dir = Path(output_dir) if output_dir else Path(data_dir) / "data"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.snapshot_files = [
-            "listings-03-25.csv",
-            "listings-06-25.csv",
-            "listings-09-25.csv"
-        ]
-        # Fixed seed for reproducible train/val/test split
-        self.RANDOM_STATE = 42
-        self.TRAIN_SPLIT = 0.8
-        self.VAL_SPLIT = 0.1
-        self.TEST_SPLIT = 0.1
 
-    def _load_snapshots(self) -> pd.DataFrame:
-        """Loads and concatenates the monthly snapshot CSVs."""
-        dataframes = []
-        for file_name in self.snapshot_files:
-            file_path = self.data_dir / file_name
-            if not file_path.exists():
-                raise FileNotFoundError(f"Expected data file not found: {file_path}")
-            
-            # Extract month (03, 06, 09) from filename and map to semantic season
-            month = file_name.split("-")[1]
-            season_ordinal = self.MONTH_TO_SEASON.get(month)
-            if season_ordinal is None:
-                raise ValueError(f"Unknown month code in file {file_name}: {month}")
-            
-            df = pd.read_csv(file_path, usecols=lambda c: c in self.REQUIRED_COLUMNS)
-            df['season_ordinal'] = season_ordinal  # Clean semantic feature for models
-            dataframes.append(df)
-            
-        return pd.concat(dataframes, ignore_index=True)
+def export_normal_and_cleaned_variants(
+    file_paths: list[Path],
+    raw_image_dir: Path,
+    output_dir: Path,
+    cleaned_max_price: float = 1000,
+) -> dict[str, dict[str, object]]:
+    """Run the full pipeline for both the normal and cleaned variants."""
+    base_df, shared_artifacts = build_base_frame(file_paths, raw_image_dir=raw_image_dir)
+    output_dir = _as_path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _clean_price(self, df: pd.DataFrame, max_price: float = None) -> pd.DataFrame:
-        """Cleans the target price column and removes invalid/missing values. Keeps only raw price.
-        
-        Args:
-            df: DataFrame with price column
-            max_price: Optional upper bound for price filtering (e.g., 5000 to remove outliers)
-        """
-        df = df.copy()
-        # Strip currency symbols and commas, convert to float
-        df['price'] = (
-            df['price']
-            .astype(str)
-            .str.replace('$', '', regex=False)
-            .str.replace(',', '', regex=False)
-            .str.strip()
-        )
-        df['price'] = pd.to_numeric(df['price'], errors='coerce')
-        # Drop rows where price is missing or non-positive
-        df = df.dropna(subset=['price'])
-        df = df[df['price'] > 0]
-        
-        # Optional: filter upper bound for outlier removal
-        if max_price is not None:
-            df = df[df['price'] <= max_price]
-        
-        return df
+    save_artifact(shared_artifacts["language_detector"], output_dir / "language_detector.joblib")
 
-    def process(self, max_price: float = None) -> pd.DataFrame:
-        """
-        Executes the universal data pipeline.
-        Returns the clean, master DataFrame ready for any downstream modeling.
-        
-        Args:
-            max_price: Optional upper bound to filter out extreme outliers
-        """
-        raw_df = self._load_snapshots()
-        clean_df = self._clean_price(raw_df, max_price=max_price)
-        
-        # Return the master "signature object"
-        return clean_df
+    normal_outputs = _split_and_export_variant(base_df, output_dir, file_tag=None)
+    cleaned_df = filter_cleaned_variant(base_df, max_price=cleaned_max_price)
+    cleaned_outputs = _split_and_export_variant(cleaned_df, output_dir, file_tag="cleaned")
+    return {
+        "shared": shared_artifacts,
+        "normal": normal_outputs,
+        "cleaned": cleaned_outputs,
+    }
 
-    def preprocess_tabular(
-        self,
-        train_df: pd.DataFrame,
-        val_df: pd.DataFrame,
-        test_df: pd.DataFrame,
-    ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict]:
-        """
-        Preprocesses tabular features for all downstream models (trees, MLPs, text/image branches).
-        - Fills missing values in numeric columns (bathrooms, bedrooms) with median from train
-        - Encodes categorical columns (room_type, neighbourhood_cleansed) with LabelEncoder
-        - Handles unseen val/test categories by mapping to special code (-1)
-        - Scales all numeric features with StandardScaler (fit on train only)
-        
-        Fit process:
-        - Fit encoders on TRAIN set only
-        - Apply fitted encoders to VAL and TEST sets (no leakage)
-        - Unseen categories in val/test map to -1
-        
-        Returns: (train_preprocessed, val_preprocessed, test_preprocessed, encoders_scalers_dict)
-        """
-        train = train_df.copy()
-        val = val_df.copy()
-        test = test_df.copy()
-        
-        # Dictionary to store all encoders and scalers for reproducibility
-        encoders_scalers = {}
-        
-        # Define preprocessing columns
-        categorical_cols = [
-            'room_type',
-            'neighbourhood_cleansed',
-            'property_type',
-            'instant_bookable',
-        ]
-        numeric_scale_cols = [
-            'accommodates',
-            'bathrooms',
-            'bedrooms',
-            'minimum_nights',
-            'season_ordinal',
-            'beds',
-            'host_total_listings_count',
-            'latitude',
-            'longitude',
-            'availability_365',
-            'number_of_reviews',
-        ]
 
-        # Coerce numerics to numeric dtype (many raw CSVs provide strings)
-        for col in numeric_scale_cols:
-            train[col] = pd.to_numeric(train[col], errors='coerce')
-            val[col] = pd.to_numeric(val[col], errors='coerce')
-            test[col] = pd.to_numeric(test[col], errors='coerce')
-
-        # Normalize categorical missing values for safe encoding
-        for col in categorical_cols:
-            train[col] = train[col].astype('object').fillna('Unknown')
-            val[col] = val[col].astype('object').fillna('Unknown')
-            test[col] = test[col].astype('object').fillna('Unknown')
-
-        # 1. FILL MISSING VALUES in numeric columns (fit on train, apply to all)
-        # For robustness, impute every numeric feature used downstream.
-        for col in numeric_scale_cols:
-            median_val = train[col].median()
-            if pd.isna(median_val):
-                median_val = 0.0
-            train[col] = train[col].fillna(median_val)
-            val[col] = val[col].fillna(median_val)
-            test[col] = test[col].fillna(median_val)
-            encoders_scalers[f'{col}_median'] = median_val
-        
-        # 2. ENCODE CATEGORICAL COLUMNS with LabelEncoder (fit on train only)
-        for col in categorical_cols:
-            le = LabelEncoder()
-            # Fit on train set ONLY
-            le.fit(train[col])
-            # Transform train
-            train[col] = le.transform(train[col])
-            
-            # Transform val: map unseen to -1
-            val_encoded = []
-            for val_item in val[col]:
-                if val_item in le.classes_:
-                    val_encoded.append(le.transform([val_item])[0])
-                else:
-                    # Unseen category → special code
-                    val_encoded.append(-1)
-            val[col] = val_encoded
-            
-            # Transform test: map unseen to -1
-            test_encoded = []
-            for test_item in test[col]:
-                if test_item in le.classes_:
-                    test_encoded.append(le.transform([test_item])[0])
-                else:
-                    # Unseen category → special code
-                    test_encoded.append(-1)
-            test[col] = test_encoded
-            
-            encoders_scalers[f'{col}_encoder'] = le
-        
-        # 3. SCALE NUMERIC FEATURES with StandardScaler (fit on train only)
-        scaler = StandardScaler()
-        scaler.fit(train[numeric_scale_cols])
-        train[numeric_scale_cols] = scaler.transform(train[numeric_scale_cols])
-        if len(val) > 0:
-            val[numeric_scale_cols] = scaler.transform(val[numeric_scale_cols])
-        if len(test) > 0:
-            test[numeric_scale_cols] = scaler.transform(test[numeric_scale_cols])
-        encoders_scalers['numeric_scaler'] = scaler
-        encoders_scalers['numeric_scale_cols'] = numeric_scale_cols
-        
-        return train, val, test, encoders_scalers
-
-    def _suffix(self, file_tag: Optional[str]) -> str:
-        return "" if not file_tag else f"_{file_tag}"
-
-    def _parquet_path(self, base_name: str, file_tag: Optional[str]) -> Path:
-        return self.output_dir / f"{base_name}{self._suffix(file_tag)}.parquet"
-
-    def _joblib_path(self, base_name: str, file_tag: Optional[str]) -> Path:
-        return self.output_dir / f"{base_name}{self._suffix(file_tag)}.joblib"
-
-    def split_and_export(self, max_price: float = None, file_tag: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Loads, cleans, splits into train/val/test (80/10/10), applies Box-Cox to price (fit on train only), 
-        and exports as Parquet files. Also preprocesses tabular features and exports preprocessed parquets.
-        
-        Split strategy (two-stage):
-        1. Split master into train (80%) and remaining (20%)
-        2. Split remaining into val (50% of 20% = 10%) and test (50% of 20% = 10%)
-        
-        Result: train=80%, val=10%, test=10%
-        
-        Args:
-            max_price: Optional upper bound to filter out extreme outliers
-            file_tag: Optional suffix for exported artifacts (e.g., 'cleaned' -> train_cleaned.parquet)
-        
-        Returns (train_df, val_df, test_df).
-        """
-        master_df = self.process(max_price=max_price)
-        
-        # Split by unique listing id to prevent leakage across time snapshots.
-        # A listing appears in multiple monthly snapshots; all rows for a given id must stay in the same split.
-        unique_ids = pd.Series(master_df['id'].dropna().unique())
-
-        # Stage 1: Split IDs into train (80%) and remaining (20%) deterministically
-        train_ids = unique_ids.sample(frac=self.TRAIN_SPLIT, random_state=self.RANDOM_STATE)
-        remaining_ids = unique_ids[~unique_ids.isin(train_ids)]
-
-        # Stage 2: Split remaining IDs into val (50% of 20% = 10%) and test (50% of 20% = 10%)
-        val_ids = remaining_ids.sample(frac=0.5, random_state=self.RANDOM_STATE)
-        test_ids = remaining_ids[~remaining_ids.isin(val_ids)]
-
-        train_df = master_df[master_df['id'].isin(set(train_ids))]
-        val_df = master_df[master_df['id'].isin(set(val_ids))]
-        test_df = master_df[master_df['id'].isin(set(test_ids))]
-
-        # Verify split proportions
-        total = len(train_df) + len(val_df) + len(test_df)
-        assert total == len(master_df), f"Split rows ({total}) != master ({len(master_df)})"
-        assert len(train_df) + len(val_df) + len(test_df) == len(master_df), "Data lost in split"
-
-        # Fit Box-Cox transformer on train only; add price_bc to all splits
-        pt = PowerTransformer(method='box-cox', standardize=False)
-        train_prices = train_df['price'].values.reshape(-1, 1)
-        pt.fit(train_prices)
-        
-        train_df = train_df.copy()
-        val_df = val_df.copy()
-        test_df = test_df.copy()
-        
-        train_df['price_bc'] = pt.transform(train_prices).ravel()
-        if len(val_df) > 0:
-            val_df['price_bc'] = pt.transform(val_df['price'].values.reshape(-1, 1)).ravel()
-        else:
-            val_df['price_bc'] = np.array([], dtype=float)
-
-        if len(test_df) > 0:
-            test_df['price_bc'] = pt.transform(test_df['price'].values.reshape(-1, 1)).ravel()
-        else:
-            test_df['price_bc'] = np.array([], dtype=float)
-        self._price_transformer = pt
-
-        # Export raw parquets (compressed with gzip)
-        train_path = self._parquet_path("train", file_tag)
-        val_path = self._parquet_path("val", file_tag)
-        test_path = self._parquet_path("test", file_tag)
-        
-        train_df.to_parquet(train_path, compression='gzip', index=False)
-        val_df.to_parquet(val_path, compression='gzip', index=False)
-        test_df.to_parquet(test_path, compression='gzip', index=False)
-        
-        # Persist the fitted price transformer for reproducibility
-        transformer_path = self._joblib_path('price_transformer', file_tag)
-        joblib.dump(self._price_transformer, transformer_path)
-        tag_label = file_tag or "default"
-        print(f"✅ Persisted price transformer ({tag_label}): {transformer_path}")
-        print(f"✅ Train set exported ({tag_label}): {train_path} ({len(train_df)} rows, {100*len(train_df)/total:.1f}%)")
-        print(f"✅ Val set exported ({tag_label}): {val_path} ({len(val_df)} rows, {100*len(val_df)/total:.1f}%)")
-        print(f"✅ Test set exported ({tag_label}): {test_path} ({len(test_df)} rows, {100*len(test_df)/total:.1f}%)")
-
-        # PREPROCESS TABULAR FEATURES for all downstream models (fit on train only, apply to all)
-        print("\nPreprocessing tabular features (fill NaNs, encode categoricals, scale numerics)...")
-        print("  Fit encoders/scalers on TRAIN set only")
-        train_tabular, val_tabular, test_tabular, encoders_scalers = self.preprocess_tabular(
-            train_df, val_df, test_df
-        )
-        
-        # Export preprocessed tabular parquets
-        train_tabular_path = self._parquet_path("train_tabular", file_tag)
-        val_tabular_path = self._parquet_path("val_tabular", file_tag)
-        test_tabular_path = self._parquet_path("test_tabular", file_tag)
-        
-        train_tabular.to_parquet(train_tabular_path, compression='gzip', index=False)
-        val_tabular.to_parquet(val_tabular_path, compression='gzip', index=False)
-        test_tabular.to_parquet(test_tabular_path, compression='gzip', index=False)
-        
-        # Persist encoders and scalers for reproducibility
-        encoders_path = self._joblib_path('tabular_encoders', file_tag)
-        joblib.dump(encoders_scalers, encoders_path)
-        print(f"✅ Persisted tabular encoders & scalers ({tag_label}): {encoders_path}")
-        print(f"✅ Train tabular exported ({tag_label}): {train_tabular_path} ({len(train_tabular)} rows)")
-        print(f"✅ Val tabular exported ({tag_label}): {val_tabular_path} ({len(val_tabular)} rows)")
-        print(f"✅ Test tabular exported ({tag_label}): {test_tabular_path} ({len(test_tabular)} rows)")
-        
-        print(f"\n📊 Preprocessing summary:")
-        print(f"   - Filled NaNs in bathrooms, bedrooms with median (from train only)")
-        print(f"   - Encoded room_type and neighbourhood_cleansed with LabelEncoder (fit on train only)")
-        print(f"   - Scaled numeric features with StandardScaler (fit on train only)")
-        print(f"   - Unseen val/test categories mapped to -1 (no data leakage)")
-        print(f"\n✅ Train-Validation-Test split complete (80/10/10)")
-
-        return train_df, val_df, test_df
-
-    def split_and_export_both(self, cleaned_max_price: float = 5000, cleaned_tag: str = "cleaned") -> Tuple[Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
-        """Exports BOTH the default dataset and a cleaned dataset (price filtered) in one run.
-
-        - Default artifacts keep the existing filenames (backward compatible).
-        - Cleaned artifacts are exported with a suffix, e.g. train_cleaned.parquet.
-
-        Returns: ((train, val, test) default, (train, val, test) cleaned)
-        """
-        default_splits = self.split_and_export(max_price=None, file_tag=None)
-        cleaned_splits = self.split_and_export(max_price=cleaned_max_price, file_tag=cleaned_tag)
-        return default_splits, cleaned_splits
+def main() -> None:
+    """Execute the full data pipeline with the repository defaults."""
+    project_root = Path(__file__).resolve().parents[1]
+    file_paths = [
+        project_root / "listings-03-25.csv",
+        project_root / "listings-06-25.csv",
+        project_root / "listings-09-25.csv",
+    ]
+    raw_image_dir = project_root / "images" / "raw"
+    output_dir = project_root / "data"
+    export_normal_and_cleaned_variants(file_paths, raw_image_dir=raw_image_dir, output_dir=output_dir)
 
 
 if __name__ == "__main__":
-    # Smoke test to ensure it runs independently
-    project_root = Path(__file__).resolve().parents[1]
-    
-    print("Initializing Data Processor...")
-    processor = AirbnbDataProcessor(data_dir=project_root)
-    
-    print("Processing and splitting master dataset (default + cleaned)...")
-    (train_df, val_df, test_df), (train_clean, val_clean, test_clean) = processor.split_and_export_both(
-        cleaned_max_price=5000,
-        cleaned_tag="cleaned",
-    )
-    
-    print(f"\n✅ Success! Train/val/test split + tabular preprocessing complete.")
-    print(f"   Train: {len(train_df)} records (80%)")
-    print(f"   Val:   {len(val_df)} records (10%)")
-    print(f"   Test:  {len(test_df)} records (10%)")
-    print(f"\n✅ Cleaned variant (price <= $5000) exported.")
-    print(f"   Train: {len(train_clean)} records")
-    print(f"   Val:   {len(val_clean)} records")
-    print(f"   Test:  {len(test_clean)} records")
-    print(f"   Parquet files saved to: {processor.output_dir}")
-    print(f"\nGenerated files:")
-    print(f"   - train.parquet, val.parquet, test.parquet (raw: for text/image branches)")
-    print(f"   - train_tabular.parquet, val_tabular.parquet, test_tabular.parquet (preprocessed: for all models)")
-    print(f"   - price_transformer.joblib")
-    print(f"   - tabular_encoders.joblib")
-    print(f"   - train_cleaned.parquet, val_cleaned.parquet, test_cleaned.parquet")
-    print(f"   - train_tabular_cleaned.parquet, val_tabular_cleaned.parquet, test_tabular_cleaned.parquet")
-    print(f"   - price_transformer_cleaned.joblib")
-    print(f"   - tabular_encoders_cleaned.joblib")
-    print(f"\nAvailable columns in raw parquets:")
-    print(f"   {train_df.columns.tolist()}")
+    main()

@@ -1,462 +1,615 @@
-import pytest
-import pandas as pd
-import numpy as np
-import joblib
-from pathlib import Path
-from pandas.testing import assert_frame_equal
-from sklearn.preprocessing import LabelEncoder, StandardScaler
-
 import sys
-# Add scripts dir to python path so we can import the processor
+from pathlib import Path
+
+import joblib
+import numpy as np
+import pandas as pd
+import pytest
+from pandas.testing import assert_frame_equal
+from sklearn.preprocessing import StandardScaler
+
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from scripts.data_processor import AirbnbDataProcessor
 
-@pytest.fixture
-def mock_data_dir(tmp_path):
-    """
-    Creates a temporary directory holding the 3 expected CSV files,
-    populated with carefully constructed mock data to test edge cases.
-    Generates sufficient data (100+ rows) for proper 80/10/10 train/val/test splits.
-    """
-    base_columns = {col: "mock_data" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
-    
-    # --- MOCK FILE 1 (March) ---
-    # Generate 40 rows: mix valid and invalid to test cleaning
-    march_data = []
-    
-    # Add valid rows
-    for i in range(1, 35):
-        row = dict(
-            base_columns,
-            id=i,
-            price=str(150 + i * 10),
-            bathrooms=str(1.0 + (i % 3) * 0.5),
-            bedrooms=str(1 + (i % 4)),
-            accommodates=str(2 + (i % 4)),
-            minimum_nights=str(1 + (i % 7))
-        )
-        march_data.append(row)
-    
-    # Add some invalid to test filtering
-    row_invalid1 = dict(base_columns, id=999, price="Contact host", bathrooms="1.0", bedrooms="1.0", accommodates="2", minimum_nights="1")
-    row_invalid2 = dict(base_columns, id=1000, price=None, bathrooms="1.0", bedrooms="1.0", accommodates="2", minimum_nights="1")
-    march_data.extend([row_invalid1, row_invalid2])
-    
-    pd.DataFrame(march_data).to_csv(tmp_path / "listings-03-25.csv", index=False)
-    
-    # --- MOCK FILE 2 (June) ---
-    # Generate 40 rows
-    june_data = []
-    for i in range(1, 41):
-        row = dict(
-            base_columns,
-            id=i,
-            price=str(200 + i * 10),
-            bathrooms=str(1.0 + (i % 3) * 0.5),
-            bedrooms=str(1 + (i % 4)),
-            accommodates=str(2 + (i % 4)),
-            minimum_nights=str(1 + (i % 7))
-        )
-        june_data.append(row)
-    pd.DataFrame(june_data).to_csv(tmp_path / "listings-06-25.csv", index=False)
-    
-    # --- MOCK FILE 3 (September) ---
-    # Generate 40 rows
-    sept_data = []
-    for i in range(1, 41):
-        row = dict(
-            base_columns,
-            id=i,
-            price=str(175 + i * 10),
-            bathrooms=str(1.0 + (i % 3) * 0.5),
-            bedrooms=str(1 + (i % 4)),
-            accommodates=str(2 + (i % 4)),
-            minimum_nights=str(1 + (i % 7))
-        )
-        sept_data.append(row)
-    pd.DataFrame(sept_data).to_csv(tmp_path / "listings-09-25.csv", index=False)
-    
-    return tmp_path
+from scripts.data_processor import (
+    add_season_ordinal,
+    apply_box_cox_transformer,
+    apply_categorical_encoder,
+    apply_language_detector,
+    apply_numeric_imputer,
+    apply_numeric_scaler,
+    apply_room_type_weights,
+    assemble_tabular_output,
+    clean_price_column,
+    create_full_text_column,
+    drop_missing_price_rows,
+    export_normal_and_cleaned_variants,
+    filter_cleaned_variant,
+    fit_box_cox_transformer,
+    fit_categorical_encoder,
+    fit_language_detector,
+    fit_numeric_imputer,
+    fit_numeric_scaler,
+    fit_room_type_weights,
+    load_raw_csvs,
+    mark_image_availability,
+    normalize_listing_id,
+    save_artifact,
+    save_parquet,
+    split_data_80_10_10,
+)
 
 
 @pytest.fixture
-def numeric_test_data_dir(tmp_path):
-    """
-    Creates test data with proper numeric types for preprocessing tests.
-    """
-    base_columns = {col: "mock" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
-    
-    rows = [
-        dict(base_columns, id=1, price="100", bathrooms="1.0", bedrooms="1.0", accommodates="2", minimum_nights="1", room_type="Entire home/apt", neighbourhood_cleansed="Ville-Marie"),
-        dict(base_columns, id=2, price="150", bathrooms=np.nan, bedrooms="2.0", accommodates="4", minimum_nights="30", room_type="Private room", neighbourhood_cleansed="Le Plateau-Mont-Royal"),
-        dict(base_columns, id=3, price="200", bathrooms="1.5", bedrooms=np.nan, accommodates="6", minimum_nights="365", room_type="Shared room", neighbourhood_cleansed="Ville-Marie"),
-    ]
-    
-    for fname in ["listings-03-25.csv", "listings-06-25.csv", "listings-09-25.csv"]:
-        pd.DataFrame(rows).to_csv(tmp_path / fname, index=False)
-    
-    return tmp_path
+def tiny_df():
+    return pd.DataFrame(
+        {
+            "id": [1, 2, 3],
+            "listing_id": ["1", "2", "3"],
+            "price": ["$120.00", "$1,234.50", "150"],
+            "description": ["Appartement tres lumineux", "Cozy studio", None],
+            "amenities": ["WiFi, Kitchen", None, "Desk"],
+            "snapshot_month": ["03", "06", "09"],
+            "room_type": ["Entire home/apt", "Private room", "Shared room"],
+            "neighbourhood_cleansed": ["Ville-Marie", "Le Plateau-Mont-Royal", "Griffintown"],
+            "property_type": ["Apartment", "Condominium", "Loft"],
+            "instant_bookable": ["t", "f", "t"],
+            "accommodates": [2, 4, 6],
+            "bathrooms": [1.0, np.nan, 1.5],
+            "bedrooms": [1, 2, 3],
+            "beds": [1, np.nan, 2],
+            "host_total_listings_count": [3, 1, 2],
+            "latitude": [45.5, 45.6, 45.7],
+            "longitude": [-73.5, -73.6, -73.7],
+            "minimum_nights": [2, 30, 365],
+            "availability_365": [120, 90, 60],
+            "number_of_reviews": [10, 20, 30],
+        }
+    )
 
-def test_price_parsing_and_nan_removal(mock_data_dir):
-    """
-    Ensures valid formats parse correctly to float, and invalid text/NaNs 
-    are gracefully dropped from the dataset.
-    """
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir)
-    df = processor.process()
-    
-    # After generating ~10 rows per file, filtering for valid prices gives us ~34 March, 40 June, 40 Sept
-    # Total expected: ~34 (Mar) + 40 (Jun) + 40 (Sep) = ~114 rows
-    assert len(df) >= 100, f"Expected at least 100 valid rows, got {len(df)}"
-    
-    # Verify all prices are valid floats and positive
-    assert df['price'].dtype == float, "Price column should be float"
-    assert (df['price'] > 0).all(), "All prices should be positive (NaNs and invalid prices were dropped)"
-    
-    # Verify we have at least one price per season
-    for season in [1, 2, 3]:
-        season_prices = df[df['season_ordinal'] == season]['price']
-        assert len(season_prices) > 0, f"Should have prices for season {season}"
-        assert season_prices.dtype == float, f"Season {season} prices should be float"
 
-def test_temporal_mapping(mock_data_dir):
-    """
-    Ensures rows are correctly mapped to semantic seasons (1=Winter, 2=Spring, 3=Summer).
-    """
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir)
-    df = processor.process()
-    
-    # Verify row counts per season are roughly as expected from mock data generation
-    season_counts = df['season_ordinal'].value_counts().to_dict()
-    assert season_counts.get(1, 0) >= 30, f"Expected ~34 Winter rows, got {season_counts.get(1, 0)}"  # Winter (March)
-    assert season_counts.get(2, 0) >= 35, f"Expected ~40 Spring rows, got {season_counts.get(2, 0)}"  # Spring (June)
-    assert season_counts.get(3, 0) >= 35, f"Expected ~40 Summer rows, got {season_counts.get(3, 0)}"  # Summer (September)
+@pytest.fixture
+def split_ready_df():
+    rows = []
+    for listing_id in range(1, 13):
+        for month in ["03", "06", "09"]:
+            rows.append(
+                {
+                    "listing_id": str(listing_id),
+                    "price": 100 + listing_id,
+                    "description": f"desc {listing_id}",
+                    "amenities": f"amenity {listing_id}",
+                    "snapshot_month": month,
+                    "room_type": ["Entire home/apt", "Private room", "Shared room"][listing_id % 3],
+                    "neighbourhood_cleansed": ["Ville-Marie", "Le Plateau-Mont-Royal", "Griffintown"][listing_id % 3],
+                    "property_type": ["Apartment", "Condominium", "Loft"][listing_id % 3],
+                    "instant_bookable": ["t", "f", "t"][listing_id % 3],
+                    "accommodates": listing_id % 6 + 1,
+                    "bathrooms": 1.0 + (listing_id % 3) * 0.5,
+                    "bedrooms": 1 + (listing_id % 4),
+                    "beds": 1 + (listing_id % 2),
+                    "host_total_listings_count": 1 + (listing_id % 5),
+                    "latitude": 45.5 + listing_id * 0.001,
+                    "longitude": -73.5 - listing_id * 0.001,
+                    "minimum_nights": 1 + (listing_id % 7),
+                    "availability_365": 30 + listing_id,
+                    "number_of_reviews": listing_id * 2,
+                    "season_ordinal": (listing_id % 3) + 1,
+                }
+            )
+    return pd.DataFrame(rows)
 
-def test_schema_enforcement(mock_data_dir):
-    """
-    Ensures ONLY explicitly required columns (+ season_ordinal) are returned,
-    even if the raw CSVs contain extra junk columns.
-    """
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir)
-    df = processor.process()
-    
-    expected_columns = set(AirbnbDataProcessor.REQUIRED_COLUMNS + ['season_ordinal'])
-    actual_columns = set(df.columns)
-    
-    assert actual_columns == expected_columns, "Processor leaked unexpected columns or dropped required ones."
-    assert "junk_column" not in df.columns
-    assert "host_name" not in df.columns
 
-def test_missing_file_fails_loudly(tmp_path):
-    """
-    Ensures the system fails immediately and loudly if a snapshot file
-    is entirely missing, rather than generating partial data quietly.
-    """
-    # Create only march and june, leave september missing
-    pd.DataFrame(columns=AirbnbDataProcessor.REQUIRED_COLUMNS).to_csv(tmp_path / "listings-03-25.csv", index=False)
-    pd.DataFrame(columns=AirbnbDataProcessor.REQUIRED_COLUMNS).to_csv(tmp_path / "listings-06-25.csv", index=False)
-    
-    processor = AirbnbDataProcessor(data_dir=tmp_path)
-    
-    with pytest.raises(FileNotFoundError, match="listings-09-25.csv"):
-        processor.process()
+@pytest.fixture
+def csv_snapshot_paths(tmp_path, split_ready_df):
+    paths = []
+    for month in ["03", "06", "09"]:
+        month_df = split_ready_df[split_ready_df["snapshot_month"] == month].copy()
+        path = tmp_path / f"listings-{month}-25.csv"
+        month_df.to_csv(path, index=False)
+        paths.append(path)
+    return paths
 
-def test_reproducibility(mock_data_dir):
-    """
-    Ensures that calling `.process()` twice on the same data yields the exact
-    same DataFrame (no weird side effects, state mutations, or random shuffling).
-    """
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir)
-    
-    df1 = processor.process()
-    df2 = processor.process()
-    
-    assert_frame_equal(df1, df2)
 
-def test_split_and_export(mock_data_dir, tmp_path):
-    """
-    Ensures train/val/test split is deterministic, correctly proportioned (80/10/10),
-    and that Parquet files are exported with expected structure.
-    """
+# load_raw_csvs (3 tests)
+def test_load_raw_csvs_happy_path(csv_snapshot_paths):
+    df = load_raw_csvs(csv_snapshot_paths)
+    assert len(df) == 36
+    assert set(df["snapshot_month"].unique()) == {"03", "06", "09"}
+
+
+def test_load_raw_csvs_empty_list_returns_empty_dataframe():
+    df = load_raw_csvs([])
+    assert isinstance(df, pd.DataFrame)
+    assert df.empty
+
+
+def test_load_raw_csvs_missing_file_raises_file_not_found(tmp_path):
+    missing = tmp_path / "listings-03-25.csv"
+    with pytest.raises(FileNotFoundError):
+        load_raw_csvs([missing])
+
+
+# normalize_listing_id (3 tests)
+def test_normalize_listing_id_renames_id_column(tiny_df):
+    out = normalize_listing_id(tiny_df, id_column="id")
+    assert "listing_id" in out.columns
+    assert "id" not in out.columns
+    assert out["listing_id"].tolist() == ["1", "2", "3"]
+
+
+def test_normalize_listing_id_keeps_existing_listing_id_as_string(tiny_df):
+    df = tiny_df.drop(columns=["id"]).copy()
+    out = normalize_listing_id(df, id_column="id")
+    assert pd.api.types.is_string_dtype(out["listing_id"]) 
+    assert out["listing_id"].tolist() == ["1", "2", "3"]
+
+
+def test_normalize_listing_id_raises_when_no_id_columns(tiny_df):
+    df = tiny_df.drop(columns=["id", "listing_id"]).copy()
+    with pytest.raises(KeyError):
+        normalize_listing_id(df, id_column="id")
+
+
+# clean_price_column (4 tests)
+def test_clean_price_column_standard_currency_format():
+    df = pd.DataFrame({"price": ["$120.00"]})
+    out = clean_price_column(df)
+    assert out.loc[0, "price"] == pytest.approx(120.0)
+
+
+def test_clean_price_column_handles_commas():
+    df = pd.DataFrame({"price": ["$1,234.50"]})
+    out = clean_price_column(df)
+    assert out.loc[0, "price"] == pytest.approx(1234.5)
+
+
+def test_clean_price_column_handles_raw_numeric_strings():
+    df = pd.DataFrame({"price": ["150"]})
+    out = clean_price_column(df)
+    assert out.loc[0, "price"] == pytest.approx(150.0)
+
+
+def test_clean_price_column_coerces_garbage_and_nan_to_nan():
+    df = pd.DataFrame({"price": ["Contact host", np.nan]})
+    out = clean_price_column(df)
+    assert pd.isna(out.loc[0, "price"])
+    assert pd.isna(out.loc[1, "price"])
+
+
+# drop_missing_price_rows (3 tests)
+def test_drop_missing_price_rows_keeps_only_positive_prices():
+    df = pd.DataFrame({"price": [100.0, 0.0, -1.0, 40.0]})
+    out = drop_missing_price_rows(df)
+    assert out["price"].tolist() == [100.0, 40.0]
+
+
+def test_drop_missing_price_rows_drops_nan():
+    df = pd.DataFrame({"price": [100.0, np.nan, 200.0]})
+    out = drop_missing_price_rows(df)
+    assert out["price"].tolist() == [100.0, 200.0]
+
+
+def test_drop_missing_price_rows_all_invalid_returns_empty():
+    df = pd.DataFrame({"price": [np.nan, 0.0, -10.0]})
+    out = drop_missing_price_rows(df)
+    assert out.empty
+
+
+# add_season_ordinal (3 tests)
+def test_add_season_ordinal_maps_known_months():
+    df = pd.DataFrame({"snapshot_month": ["03", "06", "09"]})
+    out = add_season_ordinal(df, month_column="snapshot_month")
+    assert out["season_ordinal"].tolist() == [1, 2, 3]
+
+
+def test_add_season_ordinal_accepts_non_zero_padded_months():
+    df = pd.DataFrame({"snapshot_month": ["3", "6", "9"]})
+    out = add_season_ordinal(df, month_column="snapshot_month")
+    assert out["season_ordinal"].tolist() == [1, 2, 3]
+
+
+def test_add_season_ordinal_raises_on_unsupported_month():
+    df = pd.DataFrame({"snapshot_month": ["12"]})
+    with pytest.raises(ValueError):
+        add_season_ordinal(df, month_column="snapshot_month")
+
+
+# create_full_text_column (3 tests)
+def test_create_full_text_column_happy_path():
+    df = pd.DataFrame({"description": ["Nice place"], "amenities": ["WiFi, Desk"]})
+    out = create_full_text_column(df, "description", "amenities")
+    assert out.loc[0, "full_text"] == "Nice place [SEP] WiFi, Desk"
+
+
+def test_create_full_text_column_handles_none_values():
+    df = pd.DataFrame({"description": [None], "amenities": ["WiFi"]})
+    out = create_full_text_column(df, "description", "amenities")
+    assert out.loc[0, "full_text"] == "[SEP] WiFi"
+
+
+def test_create_full_text_column_strips_extra_whitespace():
+    df = pd.DataFrame({"description": ["  Nice place  "], "amenities": ["  WiFi  "]})
+    out = create_full_text_column(df, "description", "amenities")
+    assert out.loc[0, "full_text"] == "Nice place [SEP] WiFi"
+
+
+# fit_language_detector / apply_language_detector (4 tests)
+def test_fit_language_detector_returns_expected_keys(tiny_df):
+    artifact = fit_language_detector(tiny_df["description"])
+    assert "markers" in artifact
+    assert "accent_chars" in artifact
+
+
+def test_fit_language_detector_empty_series_still_returns_defaults():
+    artifact = fit_language_detector(pd.Series([], dtype=object))
+    assert isinstance(artifact["markers"], list)
+    assert len(artifact["markers"]) > 0
+
+
+def test_apply_language_detector_happy_path():
+    artifact = {"markers": [" appartement "], "accent_chars": ""}
+    df = pd.DataFrame({"description": ["Bel appartement central", "Cozy downtown studio"]})
+    out = apply_language_detector(df, artifact, "description")
+    assert out["is_french"].tolist() == [True, False]
+
+
+def test_apply_language_detector_uses_accents_as_fallback():
+    artifact = {"markers": [], "accent_chars": "é"}
+    df = pd.DataFrame({"description": ["Tres beau quartier", "Café tres calme"]})
+    out = apply_language_detector(df, artifact, "description")
+    assert out["is_french"].tolist() == [False, True]
+
+
+# mark_image_availability (3 tests)
+def test_mark_image_availability_finds_exact_jpg(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "1.jpg").write_bytes(b"x")
+    df = pd.DataFrame({"listing_id": ["1", "2"]})
+    out = mark_image_availability(df, raw_dir, "listing_id")
+    assert out["has_valid_image"].tolist() == [True, False]
+
+
+def test_mark_image_availability_finds_any_extension(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "2.webp").write_bytes(b"x")
+    df = pd.DataFrame({"listing_id": ["2"]})
+    out = mark_image_availability(df, raw_dir, "listing_id")
+    assert bool(out.loc[0, "has_valid_image"]) is True
+
+
+def test_mark_image_availability_with_no_files_marks_false(tmp_path):
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    df = pd.DataFrame({"listing_id": ["1"]})
+    out = mark_image_availability(df, raw_dir, "listing_id")
+    assert bool(out.loc[0, "has_valid_image"]) is False
+
+
+# split_data_80_10_10 (4 tests)
+def test_split_data_80_10_10_proportions_and_disjoint(split_ready_df):
+    train, val, test = split_data_80_10_10(split_ready_df, seed=42)
+    assert len(train) + len(val) + len(test) == len(split_ready_df)
+    train_ids = set(train["listing_id"])
+    val_ids = set(val["listing_id"])
+    test_ids = set(test["listing_id"])
+    assert train_ids.isdisjoint(val_ids)
+    assert train_ids.isdisjoint(test_ids)
+    assert val_ids.isdisjoint(test_ids)
+
+
+def test_split_data_80_10_10_is_deterministic(split_ready_df):
+    t1, v1, s1 = split_data_80_10_10(split_ready_df, seed=42)
+    t2, v2, s2 = split_data_80_10_10(split_ready_df, seed=42)
+    assert_frame_equal(t1.reset_index(drop=True), t2.reset_index(drop=True))
+    assert_frame_equal(v1.reset_index(drop=True), v2.reset_index(drop=True))
+    assert_frame_equal(s1.reset_index(drop=True), s2.reset_index(drop=True))
+
+
+def test_split_data_80_10_10_empty_dataframe_returns_three_empty_frames():
+    empty_df = pd.DataFrame(columns=["listing_id", "price"])
+    train, val, test = split_data_80_10_10(empty_df, seed=42)
+    assert train.empty and val.empty and test.empty
+
+
+def test_split_data_80_10_10_small_input_safe_remainder_logic():
+    tiny = pd.DataFrame({"listing_id": ["1", "2"], "price": [100, 200]})
+    train, val, test = split_data_80_10_10(tiny, seed=42)
+    assert len(train) + len(val) + len(test) == 2
+
+
+# fit_box_cox_transformer / apply_box_cox_transformer (4 tests)
+def test_fit_box_cox_transformer_happy_path():
+    transformer = fit_box_cox_transformer(pd.Series([100.0, 120.0, 200.0]))
+    assert hasattr(transformer, "lambdas_")
+
+
+def test_fit_box_cox_transformer_raises_on_non_positive():
+    with pytest.raises(ValueError, match="strictly positive"):
+        fit_box_cox_transformer(pd.Series([0.0, -1.0]))
+
+
+def test_fit_box_cox_transformer_raises_on_empty_series():
+    with pytest.raises(ValueError, match="at least one positive"):
+        fit_box_cox_transformer(pd.Series([], dtype=float))
+
+
+def test_apply_box_cox_transformer_returns_transformed_series():
+    src = pd.Series([100.0, 120.0, 200.0], name="price")
+    transformer = fit_box_cox_transformer(src)
+    out = apply_box_cox_transformer(src, transformer)
+    assert len(out) == len(src)
+    assert out.name == "price"
+    assert not np.allclose(out.to_numpy(), src.to_numpy())
+
+
+# fit_numeric_imputer / apply_numeric_imputer (4 tests)
+def test_fit_numeric_imputer_happy_path_medians():
+    df = pd.DataFrame({"bathrooms": [1.0, 2.0, 3.0], "beds": [1.0, 2.0, 3.0]})
+    artifact = fit_numeric_imputer(df, ["bathrooms", "beds"])
+    assert artifact["bathrooms"] == pytest.approx(2.0)
+    assert artifact["beds"] == pytest.approx(2.0)
+
+
+def test_fit_numeric_imputer_all_nan_column_defaults_zero():
+    df = pd.DataFrame({"bathrooms": [np.nan, np.nan]})
+    artifact = fit_numeric_imputer(df, ["bathrooms"])
+    assert artifact["bathrooms"] == pytest.approx(0.0)
+
+
+def test_apply_numeric_imputer_fills_nan_but_preserves_existing_zero():
+    artifact = {"bathrooms": 1.5, "beds": 2.0}
+    df = pd.DataFrame({"bathrooms": [np.nan, 0.0], "beds": [np.nan, 0.0]})
+    out = apply_numeric_imputer(df, artifact, ["bathrooms", "beds"])
+    assert out.loc[0, "bathrooms"] == pytest.approx(1.5)
+    assert out.loc[1, "bathrooms"] == pytest.approx(0.0)
+    assert out.loc[1, "beds"] == pytest.approx(0.0)
+
+
+def test_apply_numeric_imputer_coerces_numeric_strings():
+    artifact = {"bathrooms": 1.0}
+    df = pd.DataFrame({"bathrooms": ["2.5", None]})
+    out = apply_numeric_imputer(df, artifact, ["bathrooms"])
+    assert out["bathrooms"].tolist() == [2.5, 1.0]
+
+
+# fit_categorical_encoder / apply_categorical_encoder (5 tests)
+def test_fit_categorical_encoder_assigns_indices_starting_at_one():
+    df = pd.DataFrame({"room_type": ["Entire home/apt", "Private room"]})
+    artifact = fit_categorical_encoder(df, ["room_type"])
+    assert set(artifact["room_type"].values()) == {1, 2}
+
+
+def test_fit_categorical_encoder_ignores_unknown_like_values():
+    df = pd.DataFrame({"room_type": ["Entire home/apt", "Unknown", None, "  "]})
+    artifact = fit_categorical_encoder(df, ["room_type"])
+    assert artifact["room_type"] == {"Entire home/apt": 1}
+
+
+def test_apply_categorical_encoder_maps_known_categories_correctly():
+    artifact = {"room_type": {"Entire home/apt": 1, "Private room": 2}}
+    df = pd.DataFrame({"room_type": ["Private room", "Entire home/apt"]})
+    out = apply_categorical_encoder(df, artifact, ["room_type"])
+    assert out["room_type"].tolist() == [2, 1]
+
+
+def test_apply_categorical_encoder_maps_unseen_to_zero():
+    artifact = {"room_type": {"Entire home/apt": 1}}
+    df = pd.DataFrame({"room_type": ["Spaceship"]})
+    out = apply_categorical_encoder(df, artifact, ["room_type"])
+    assert out.loc[0, "room_type"] == 0
+
+
+def test_apply_categorical_encoder_maps_none_and_nan_to_zero():
+    artifact = {"room_type": {"Entire home/apt": 1}}
+    df = pd.DataFrame({"room_type": [None, np.nan]})
+    out = apply_categorical_encoder(df, artifact, ["room_type"])
+    assert out["room_type"].tolist() == [0, 0]
+
+
+# fit_numeric_scaler / apply_numeric_scaler (4 tests)
+def test_fit_numeric_scaler_happy_path_returns_scaler_instance():
+    df = pd.DataFrame({"x": [1.0, 2.0], "y": [2.0, 3.0]})
+    scaler = fit_numeric_scaler(df, ["x", "y"])
+    assert isinstance(scaler, StandardScaler)
+
+
+def test_fit_numeric_scaler_raises_on_empty_input():
+    with pytest.raises(ValueError):
+        fit_numeric_scaler(pd.DataFrame({"x": []}), ["x"])
+
+
+def test_apply_numeric_scaler_transforms_values():
+    train = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+    scaler = fit_numeric_scaler(train, ["x"])
+    out = apply_numeric_scaler(train, scaler, ["x"])
+    assert abs(out["x"].mean()) < 1e-8
+
+
+def test_apply_numeric_scaler_empty_dataframe_returns_empty_safely():
+    train = pd.DataFrame({"x": [1.0, 2.0, 3.0]})
+    scaler = fit_numeric_scaler(train, ["x"])
+    empty = pd.DataFrame(columns=["x"])
+    out = apply_numeric_scaler(empty, scaler, ["x"])
+    assert out.empty
+
+
+# fit_room_type_weights / apply_room_type_weights (4 tests)
+def test_fit_room_type_weights_happy_path_inverse_frequency():
+    df = pd.DataFrame({"room_type": ["A", "A", "B"]})
+    weights = fit_room_type_weights(df, "room_type")
+    assert weights["B"] > weights["A"]
+
+
+def test_fit_room_type_weights_empty_after_normalization_returns_empty_dict():
+    df = pd.DataFrame({"room_type": [None, "Unknown", np.nan]})
+    weights = fit_room_type_weights(df, "room_type")
+    assert weights == {}
+
+
+def test_apply_room_type_weights_happy_path():
+    df = pd.DataFrame({"room_type": ["A", "B"]})
+    out = apply_room_type_weights(df, {"A": 0.5, "B": 2.0}, "room_type")
+    assert out["sample_weight"].tolist() == [0.5, 2.0]
+
+
+def test_apply_room_type_weights_uses_default_when_missing_in_map():
+    df = pd.DataFrame({"room_type": ["X"]})
+    out = apply_room_type_weights(df, {}, "room_type")
+    assert out.loc[0, "sample_weight"] == pytest.approx(1.0)
+
+
+# assemble_tabular_output (3 tests)
+def test_assemble_tabular_output_happy_path_column_presence(split_ready_df):
+    df = split_ready_df.copy()
+    df["price_bc"] = df["price"]
+    df["sample_weight"] = 1.0
+    df["has_valid_image"] = True
+    df["is_french"] = False
+    df["full_text"] = "text"
+    out = assemble_tabular_output(
+        df,
+        target_columns=["price", "price_bc"],
+        feature_columns=["room_type", "accommodates", "season_ordinal"],
+    )
+    for col in ["listing_id", "price", "price_bc", "sample_weight", "room_type", "accommodates", "season_ordinal"]:
+        assert col in out.columns
+
+
+def test_assemble_tabular_output_skips_missing_columns_gracefully():
+    df = pd.DataFrame({"listing_id": ["1"], "price": [100.0]})
+    out = assemble_tabular_output(df, target_columns=["price_bc"], feature_columns=["room_type"])
+    assert out.columns.tolist() == ["listing_id"]
+
+
+def test_assemble_tabular_output_deduplicates_columns():
+    df = pd.DataFrame({"listing_id": ["1"], "price": [100.0], "sample_weight": [1.0], "room_type": [1]})
+    out = assemble_tabular_output(df, target_columns=["price", "price"], feature_columns=["room_type", "room_type"])
+    assert out.columns.tolist().count("price") == 1
+    assert out.columns.tolist().count("room_type") == 1
+
+
+# save_parquet / save_artifact (3 tests)
+def test_save_parquet_round_trip(tmp_path):
+    df = pd.DataFrame({"x": [1, 2]})
+    path = tmp_path / "sub" / "file.parquet"
+    save_parquet(df, path)
+    loaded = pd.read_parquet(path)
+    assert_frame_equal(df, loaded)
+
+
+def test_save_artifact_round_trip(tmp_path):
+    artifact = {"a": 1}
+    path = tmp_path / "sub" / "artifact.joblib"
+    save_artifact(artifact, path)
+    loaded = joblib.load(path)
+    assert loaded == artifact
+
+
+def test_save_helpers_create_parent_directories(tmp_path):
+    parquet_path = tmp_path / "a" / "b" / "c.parquet"
+    artifact_path = tmp_path / "x" / "y" / "z.joblib"
+    save_parquet(pd.DataFrame({"x": [1]}), parquet_path)
+    save_artifact({"x": 1}, artifact_path)
+    assert parquet_path.exists()
+    assert artifact_path.exists()
+
+
+# filter_cleaned_variant (3 tests)
+def test_filter_cleaned_variant_happy_path_bounds_inclusive():
+    df = pd.DataFrame({"price": [50.0, 1000.0]})
+    out = filter_cleaned_variant(df)
+    assert out["price"].tolist() == [50.0, 1000.0]
+
+
+def test_filter_cleaned_variant_drops_outside_bounds():
+    df = pd.DataFrame({"price": [49.9, 1000.1, 500.0]})
+    out = filter_cleaned_variant(df)
+    assert out["price"].tolist() == [500.0]
+
+
+def test_filter_cleaned_variant_all_filtered_returns_empty():
+    df = pd.DataFrame({"price": [1.0, 1001.0]})
+    out = filter_cleaned_variant(df)
+    assert out.empty
+
+
+# export_normal_and_cleaned_variants (3 tests)
+def test_export_normal_and_cleaned_variants_writes_required_files(tmp_path, split_ready_df):
+    csv_dir = tmp_path / "csvs"
+    csv_dir.mkdir()
+    raw_image_dir = tmp_path / "images_raw"
+    raw_image_dir.mkdir()
+    (raw_image_dir / "1.jpg").write_bytes(b"x")
+
+    base = split_ready_df.copy()
+    base.loc[base["listing_id"] == "1", "price"] = 25
+    base.loc[base["listing_id"] == "2", "price"] = 1500
+
+    paths = []
+    for month in ["03", "06", "09"]:
+        month_df = base[base["snapshot_month"] == month].copy()
+        p = csv_dir / f"listings-{month}-25.csv"
+        month_df.to_csv(p, index=False)
+        paths.append(p)
+
     output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir)
-    
-    train_df, val_df, test_df = processor.split_and_export()
-    
-    # Check proportions: 80/10/10 split (with ~114 rows total from mock data)
-    total = len(train_df) + len(val_df) + len(test_df)
-    assert total >= 100, f"Expected at least 100 total rows, got {total}"
-    # 80% of 6 = 4.8 ≈ 5, 10% of 6 = 0.6 ≈ 1 (with rounding, may vary slightly)
-    assert abs(len(train_df) / total - 0.8) < 0.05, f"Train proportion {len(train_df)/total:.2%} not ~80%"
-    assert abs(len(val_df) / total - 0.1) < 0.05, f"Val proportion {len(val_df)/total:.2%} not ~10%"
-    assert abs(len(test_df) / total - 0.1) < 0.05, f"Test proportion {len(test_df)/total:.2%} not ~10%"
-    
-    # Check that parquet files were created (all 6)
-    train_parquet = output_dir / "train.parquet"
-    val_parquet = output_dir / "val.parquet"
-    test_parquet = output_dir / "test.parquet"
-    assert train_parquet.exists(), f"Train parquet not found at {train_parquet}"
-    assert val_parquet.exists(), f"Val parquet not found at {val_parquet}"
-    assert test_parquet.exists(), f"Test parquet not found at {test_parquet}"
-    
-    # Load parquets and verify structure
-    loaded_train = pd.read_parquet(train_parquet).reset_index(drop=True)
-    loaded_val = pd.read_parquet(val_parquet).reset_index(drop=True)
-    loaded_test = pd.read_parquet(test_parquet).reset_index(drop=True)
-    assert_frame_equal(loaded_train, train_df.reset_index(drop=True))
-    assert_frame_equal(loaded_val, val_df.reset_index(drop=True))
-    assert_frame_equal(loaded_test, test_df.reset_index(drop=True))
+    export_normal_and_cleaned_variants(paths, raw_image_dir=raw_image_dir, output_dir=output_dir)
 
-def test_split_deterministic(mock_data_dir, tmp_path):
-    """
-    Ensures that the train/val/test split is deterministic and reproducible
-    when using the same random_state (42).
-    """
-    output_dir1 = tmp_path / "output1"
-    output_dir2 = tmp_path / "output2"
-    
-    processor1 = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir1)
-    processor2 = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir2)
-    
-    train_df1, val_df1, test_df1 = processor1.split_and_export()
-    train_df2, val_df2, test_df2 = processor2.split_and_export()
-    
-    # All three splits should be identical (same rows in same order)
-    assert_frame_equal(train_df1, train_df2)
-    assert_frame_equal(val_df1, val_df2)
-    assert_frame_equal(test_df1, test_df2)
+    assert (output_dir / "train.parquet").exists()
+    assert (output_dir / "train_cleaned.parquet").exists()
+    assert (output_dir / "train_tabular.parquet").exists()
+    assert (output_dir / "train_cleaned_tabular.parquet").exists()
+    assert (output_dir / "language_detector.joblib").exists()
 
-def test_split_contains_all_data(mock_data_dir, tmp_path):
-    """
-    Ensures that train + val + test covers all original data with no overlap or missing rows.
-    """
+
+def test_export_normal_and_cleaned_variants_persists_independent_transformers(tmp_path, split_ready_df):
+    csv_dir = tmp_path / "csvs"
+    csv_dir.mkdir()
+    raw_image_dir = tmp_path / "images_raw"
+    raw_image_dir.mkdir()
+
+    base = split_ready_df.copy()
+    base.loc[base["listing_id"] == "1", "price"] = 25
+    base.loc[base["listing_id"] == "2", "price"] = 1500
+
+    paths = []
+    for month in ["03", "06", "09"]:
+        month_df = base[base["snapshot_month"] == month].copy()
+        p = csv_dir / f"listings-{month}-25.csv"
+        month_df.to_csv(p, index=False)
+        paths.append(p)
+
     output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=mock_data_dir, output_dir=output_dir)
-    
-    master_df = processor.process()
-    train_df, val_df, test_df = processor.split_and_export()
-    
-    # Combined train + val + test should have all rows from master
-    combined_ids = set(train_df['id'].tolist() + val_df['id'].tolist() + test_df['id'].tolist())
-    master_ids = set(master_df['id'].tolist())
-    
-    assert len(combined_ids) == len(master_ids), f"Combined has {len(combined_ids)} unique IDs, master has {len(master_ids)}"
-    assert combined_ids == master_ids, "Train/val/test IDs don't cover all original data"
-    assert len(train_df) + len(val_df) + len(test_df) == len(master_df), \
-        f"Train ({len(train_df)}) + val ({len(val_df)}) + test ({len(test_df)}) = {len(train_df) + len(val_df) + len(test_df)}, but master has {len(master_df)}"
+    export_normal_and_cleaned_variants(paths, raw_image_dir=raw_image_dir, output_dir=output_dir)
+
+    normal_boxcox = joblib.load(output_dir / "price_transformer.joblib")
+    cleaned_boxcox = joblib.load(output_dir / "price_transformer_cleaned.joblib")
+    assert hasattr(normal_boxcox, "lambdas_")
+    assert hasattr(cleaned_boxcox, "lambdas_")
+    assert not np.allclose(normal_boxcox.lambdas_, cleaned_boxcox.lambdas_)
 
 
-def test_remove_nonpositive_prices(tmp_path):
-    """
-    Ensure rows with price == 0 or negative are removed by the processor.
-    """
-    base_columns = {col: "mock" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
-    # Create rows: one valid, one zero, one negative
-    rows = [
-        dict(base_columns, id=1, price="100"),
-        dict(base_columns, id=2, price="0"),
-        dict(base_columns, id=3, price="-50"),
-    ]
-    for fname in ["listings-03-25.csv", "listings-06-25.csv", "listings-09-25.csv"]:
-        # write the same small set to each snapshot to exercise processing
-        pd.DataFrame(rows).to_csv(tmp_path / fname, index=False)
+def test_export_normal_and_cleaned_variants_cleaned_prices_respect_bounds(tmp_path, split_ready_df):
+    csv_dir = tmp_path / "csvs"
+    csv_dir.mkdir()
+    raw_image_dir = tmp_path / "images_raw"
+    raw_image_dir.mkdir()
 
-    processor = AirbnbDataProcessor(data_dir=tmp_path)
-    df = processor.process()
+    base = split_ready_df.copy()
+    base.loc[base["listing_id"] == "1", "price"] = 25
+    base.loc[base["listing_id"] == "2", "price"] = 1500
 
-    # Only the positive price row should remain
-    assert (df['price'] > 0).all(), "Processor failed to remove non-positive price rows"
+    paths = []
+    for month in ["03", "06", "09"]:
+        month_df = base[base["snapshot_month"] == month].copy()
+        p = csv_dir / f"listings-{month}-25.csv"
+        month_df.to_csv(p, index=False)
+        paths.append(p)
 
-
-def test_preprocess_tabular_fill_nans(numeric_test_data_dir, tmp_path):
-    """
-    Ensures preprocess_tabular fills NaN values in bathrooms and bedrooms with median.
-    """
     output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    # Load raw data to get train/val/test
-    master_df = processor.process()
-    train_df = master_df.iloc[:2]   # First 2 rows for train
-    val_df = master_df.iloc[2:2]    # Next rows for validation (empty okay for this test)
-    test_df = master_df.iloc[2:]    # Last row for test
-    
-    if len(val_df) == 0:  # If val is empty, use first row from test
-        val_df = test_df.iloc[:1]
-        test_df = test_df.iloc[1:]
-    
-    train_prep, val_prep, test_prep, encoders = processor.preprocess_tabular(train_df, val_df, test_df)
-    
-    # Check that no NaNs remain in bathrooms/bedrooms
-    assert train_prep['bathrooms'].isna().sum() == 0, "NaNs in train bathrooms not filled"
-    assert train_prep['bedrooms'].isna().sum() == 0, "NaNs in train bedrooms not filled"
-    if len(val_prep) > 0:
-        assert val_prep['bathrooms'].isna().sum() == 0, "NaNs in val bathrooms not filled"
-        assert val_prep['bedrooms'].isna().sum() == 0, "NaNs in val bedrooms not filled"
-    if len(test_prep) > 0:
-        assert test_prep['bathrooms'].isna().sum() == 0, "NaNs in test bathrooms not filled"
-        assert test_prep['bedrooms'].isna().sum() == 0, "NaNs in test bedrooms not filled"
-    
-    # Check that medians were calculated and stored
-    assert 'bathrooms_median' in encoders, "bathrooms median not stored"
-    assert 'bedrooms_median' in encoders, "bedrooms median not stored"
+    export_normal_and_cleaned_variants(paths, raw_image_dir=raw_image_dir, output_dir=output_dir)
 
-
-def test_preprocess_tabular_encode_categoricals(numeric_test_data_dir, tmp_path):
-    """
-    Ensures categorical columns (room_type, neighbourhood_cleansed) are encoded to integers.
-    """
-    output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    master_df = processor.process()
-    train_df = master_df.iloc[:2]
-    val_df = master_df.iloc[2:2]  # Empty or minimal
-    test_df = master_df.iloc[2:]
-    
-    if len(val_df) == 0 and len(test_df) > 1:
-        val_df = test_df.iloc[:1]
-        test_df = test_df.iloc[1:]
-    
-    train_prep, val_prep, test_prep, encoders = processor.preprocess_tabular(train_df, val_df, test_df)
-    
-    # Check that room_type is now numeric
-    assert pd.api.types.is_integer_dtype(train_prep['room_type']), "room_type not encoded to integer"
-    if len(test_prep) > 0:
-        assert pd.api.types.is_integer_dtype(test_prep['room_type']), "test room_type not encoded to integer"
-    
-    # Check that neighbourhood_cleansed is now numeric
-    assert pd.api.types.is_integer_dtype(train_prep['neighbourhood_cleansed']), "neighbourhood_cleansed not encoded"
-    if len(test_prep) > 0:
-        assert pd.api.types.is_integer_dtype(test_prep['neighbourhood_cleansed']), "test neighbourhood_cleansed not encoded"
-    
-    # Check that encoders are stored
-    assert 'room_type_encoder' in encoders, "room_type encoder not stored"
-    assert 'neighbourhood_cleansed_encoder' in encoders, "neighbourhood_cleansed encoder not stored"
-
-
-def test_preprocess_tabular_scale_numerics(numeric_test_data_dir, tmp_path):
-    """
-    Ensures numeric features are scaled with StandardScaler (mean~0, std~1).
-    """
-    output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    master_df = processor.process()
-    train_df = master_df.iloc[:2]
-    val_df = master_df.iloc[2:2]  # Empty or minimal
-    test_df = master_df.iloc[2:]
-    
-    if len(val_df) == 0 and len(test_df) > 1:
-        val_df = test_df.iloc[:1]
-        test_df = test_df.iloc[1:]
-    
-    train_prep, val_prep, test_prep, encoders = processor.preprocess_tabular(train_df, val_df, test_df)
-    
-    # Check that numeric features are scaled (mean near 0, std near 1)
-    numeric_cols = ['accommodates', 'bathrooms', 'bedrooms', 'minimum_nights', 'season_ordinal']
-    for col in numeric_cols:
-        train_mean = train_prep[col].mean()
-        train_std = train_prep[col].std()
-        # For small sample sizes, std might be 0, so just check it's reasonable
-        assert abs(train_mean) < 5, f"{col} train mean not close to 0: {train_mean}"
-    
-    # Check that scaler is stored
-    assert 'numeric_scaler' in encoders, "numeric_scaler not stored"
-    assert 'numeric_scale_cols' in encoders, "numeric_scale_cols not stored"
-
-
-def test_preprocess_tabular_unseen_categories(numeric_test_data_dir, tmp_path):
-    """
-    Ensures unseen val/test categories are mapped to special code (-1).
-    """
-    base_columns = {col: "mock" for col in AirbnbDataProcessor.REQUIRED_COLUMNS}
-    train_rows = [
-        dict(base_columns, id=1, price="100", bathrooms=1.0, bedrooms=1.0, accommodates=2, minimum_nights=1, season_ordinal=1, room_type="Entire home/apt", neighbourhood_cleansed="Ville-Marie"),
-        dict(base_columns, id=2, price="150", bathrooms=2.0, bedrooms=2.0, accommodates=4, minimum_nights=30, season_ordinal=2, room_type="Private room", neighbourhood_cleansed="Le Plateau-Mont-Royal"),
-    ]
-    val_rows = [
-        dict(base_columns, id=3, price="175", bathrooms=1.5, bedrooms=1.5, accommodates=3, minimum_nights=14, season_ordinal=2, room_type="Private room", neighbourhood_cleansed="Le Plateau-Mont-Royal"),
-    ]
-    test_rows = [
-        dict(base_columns, id=4, price="200", bathrooms=1.5, bedrooms=1.5, accommodates=6, minimum_nights=365, season_ordinal=3, room_type="Hotel room", neighbourhood_cleansed="UnknownNeighbourhood"),  # Unseen!
-    ]
-    
-    output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    train_df = pd.DataFrame(train_rows)
-    val_df = pd.DataFrame(val_rows)
-    test_df = pd.DataFrame(test_rows)
-    
-    train_prep, val_prep, test_prep, encoders = processor.preprocess_tabular(train_df, val_df, test_df)
-    
-    # Check that unseen test categories are mapped to -1
-    unseen_room = test_prep.loc[0, 'room_type']
-    unseen_neighbourhood = test_prep.loc[0, 'neighbourhood_cleansed']
-    
-    assert unseen_room == -1, f"Unseen room_type not mapped to -1, got {unseen_room}"
-    assert unseen_neighbourhood == -1, f"Unseen neighbourhood not mapped to -1, got {unseen_neighbourhood}"
-
-
-def test_split_and_export_creates_tabular_parquets(numeric_test_data_dir, tmp_path):
-    """
-    Ensures split_and_export creates raw and tabular preprocessed parquets for all 3 splits.
-    """
-    output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    train_df, val_df, test_df = processor.split_and_export()
-    
-    # Check that raw parquets exist (all 3)
-    assert (output_dir / "train.parquet").exists(), "train.parquet not created"
-    assert (output_dir / "val.parquet").exists(), "val.parquet not created"
-    assert (output_dir / "test.parquet").exists(), "test.parquet not created"
-    
-    # Check that tabular preprocessed parquets exist (all 3)
-    assert (output_dir / "train_tabular.parquet").exists(), "train_tabular.parquet not created"
-    assert (output_dir / "val_tabular.parquet").exists(), "val_tabular.parquet not created"
-    assert (output_dir / "test_tabular.parquet").exists(), "test_tabular.parquet not created"
-    
-    # Check that encoders are persisted
-    assert (output_dir / "tabular_encoders.joblib").exists(), "tabular_encoders.joblib not created"
-    
-    # Load and verify tabular parquets
-    train_tabular = pd.read_parquet(output_dir / "train_tabular.parquet")
-    val_tabular = pd.read_parquet(output_dir / "val_tabular.parquet")
-    test_tabular = pd.read_parquet(output_dir / "test_tabular.parquet")
-    
-    # Check that categorical features are numeric
-    assert pd.api.types.is_integer_dtype(train_tabular['room_type']), "room_type not encoded in train_tabular"
-    assert pd.api.types.is_integer_dtype(train_tabular['neighbourhood_cleansed']), "neighbourhood not encoded in train_tabular"
-    
-    # Check that no NaNs remain in numeric columns
-    assert train_tabular['bathrooms'].isna().sum() == 0, "NaNs still in train bathrooms"
-    assert train_tabular['bedrooms'].isna().sum() == 0, "NaNs still in train bedrooms"
-    if len(val_tabular) > 0:
-        assert val_tabular['bathrooms'].isna().sum() == 0, "NaNs still in val bathrooms"
-        assert val_tabular['bedrooms'].isna().sum() == 0, "NaNs still in val bedrooms"
-
-
-def test_split_and_export_encoders_persisted(numeric_test_data_dir, tmp_path):
-    """
-    Ensures tabular_encoders.joblib contains the encoder/scaler objects.
-    """
-    output_dir = tmp_path / "output"
-    processor = AirbnbDataProcessor(data_dir=numeric_test_data_dir, output_dir=output_dir)
-    
-    processor.split_and_export()
-    
-    # Load persisted encoders
-    encoders = joblib.load(output_dir / "tabular_encoders.joblib")
-    
-    # Check that expected keys are present
-    assert 'room_type_encoder' in encoders, "room_type_encoder not in persisted encoders"
-    assert 'neighbourhood_cleansed_encoder' in encoders, "neighbourhood_cleansed_encoder not in persisted encoders"
-    assert 'numeric_scaler' in encoders, "numeric_scaler not in persisted encoders"
-    assert 'bathrooms_median' in encoders, "bathrooms_median not in persisted encoders"
-    assert 'bedrooms_median' in encoders, "bedrooms_median not in persisted encoders"
-    
-    # Verify types
-    assert isinstance(encoders['room_type_encoder'], LabelEncoder), "room_type_encoder not LabelEncoder"
-    assert isinstance(encoders['numeric_scaler'], StandardScaler), "numeric_scaler not StandardScaler"
+    cleaned_train = pd.read_parquet(output_dir / "train_cleaned.parquet")
+    assert cleaned_train["price"].between(50, 1000).all()
