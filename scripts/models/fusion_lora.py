@@ -87,18 +87,14 @@ LOG_EVERY        = 50
 
 
 # ---------------------------------------------------------------------------
-# Dataset — all data preloaded into RAM in __init__ (Rule 8)
+# Dataset — lazy image loading with DataLoader prefetch via num_workers
 # ---------------------------------------------------------------------------
 
 class FusionLoRADataset(Dataset):
     """
-    Loads and RAM-preloads all modalities for a single split.
-
-    Tokens and tabular arrays are stored as plain numpy arrays and converted
-    to tensors in __getitem__ (zero-copy via torch.from_numpy).
-    Images are decoded once from disk, normalised, and stored as float16
-    tensors stacked in a single contiguous block — trading RAM for zero
-    per-item decode overhead.
+    Text and tabular are tokenized/loaded into RAM once at init.
+    Images are loaded from disk on demand in __getitem__ — DataLoader workers
+    prefetch the next batch in parallel while the GPU processes the current one.
     """
 
     def __init__(
@@ -113,7 +109,7 @@ class FusionLoRADataset(Dataset):
         assert len(tab_df) == len(raw_df), "tabular and raw parquet row counts must match"
 
         n = len(tab_df)
-        listing_ids = tab_df["listing_id"].to_numpy()
+        self.image_size = image_size
 
         # --- Tabular (already scaled/encoded upstream) ---
         self.tabular = tab_df[TABULAR_COLS].to_numpy(dtype=np.float32)   # (N, 16)
@@ -133,49 +129,40 @@ class FusionLoRADataset(Dataset):
         self.input_ids      = encoded["input_ids"].astype(np.int64)       # (N, seq)
         self.attention_mask = encoded["attention_mask"].astype(np.int64)  # (N, seq)
 
-        # --- Images: decode + normalise once, store as float16 ---
-        print(f"  Loading {n} images from {image_dir}...", flush=True)
-        imgs = torch.empty(n, 3, image_size, image_size, dtype=torch.float16)
-
-        # Build id→path index once
+        # --- Images: build path index only, load lazily in __getitem__ ---
+        print(f"  Indexing {n} images from {image_dir}...", flush=True)
+        listing_ids = tab_df["listing_id"].to_numpy()
         img_index: dict[str, Path] = {}
         if image_dir.exists():
             for p in image_dir.glob("*.jpg"):
                 img_index[p.stem] = p
+        self.image_paths = [img_index.get(str(lid)) for lid in listing_ids]
+        self._placeholder: torch.Tensor | None = None
 
-        placeholder = self._make_placeholder(image_size)
-
-        for i, lid in enumerate(listing_ids):
-            key = str(lid)
-            p   = img_index.get(key)
-            if p is not None:
-                try:
-                    img = Image.open(p).convert("RGB")
-                    arr = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0)
-                    arr = arr.permute(2, 0, 1)                  # HWC → CHW
-                    arr = (arr - IMAGENET_MEAN) / IMAGENET_STD
-                    imgs[i] = arr.half()
-                    continue
-                except Exception:
-                    pass
-            imgs[i] = placeholder.half()
-
-        self.images = imgs   # (N, 3, H, W) float16, fully in RAM
-
-    @staticmethod
-    def _make_placeholder(image_size: int) -> torch.Tensor:
-        """Returns a normalised tensor of pure zeros (ImageNet-mean fill → 0 after norm)."""
-        arr = IMAGENET_MEAN.expand(3, image_size, image_size).clone()
-        return (arr - IMAGENET_MEAN) / IMAGENET_STD
+    def _get_placeholder(self) -> torch.Tensor:
+        if self._placeholder is None:
+            arr = IMAGENET_MEAN.expand(3, self.image_size, self.image_size).clone()
+            self._placeholder = (arr - IMAGENET_MEAN) / IMAGENET_STD
+        return self._placeholder
 
     def __len__(self) -> int:
         return len(self.targets)
 
     def __getitem__(self, idx: int):
+        p = self.image_paths[idx]
+        img_tensor = self._get_placeholder()
+        if p is not None:
+            try:
+                img = Image.open(p).convert("RGB")
+                arr = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0)
+                arr = arr.permute(2, 0, 1)
+                img_tensor = (arr - IMAGENET_MEAN) / IMAGENET_STD
+            except Exception:
+                pass
         return {
             "input_ids":      torch.from_numpy(self.input_ids[idx]),
             "attention_mask": torch.from_numpy(self.attention_mask[idx]),
-            "image":          self.images[idx].float(),   # float16 → float32 on GPU
+            "image":          img_tensor,
             "tabular":        torch.from_numpy(self.tabular[idx]),
             "target":         torch.tensor(self.targets[idx]),
             "sample_weight":  torch.tensor(self.sample_weights[idx]),
