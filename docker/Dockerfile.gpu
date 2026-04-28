@@ -1,0 +1,14 @@
+FROM pytorch/pytorch:2.2.2-cuda12.1-cudnn8-runtime
+
+RUN pip install --no-cache-dir \
+        "transformers>=4.40,<5" \
+        "peft>=0.10,<0.14" \
+        pandas \
+        pyarrow \
+        scikit-learn \
+        joblib \
+        psutil \
+        pillow
+
+WORKDIR /workspace
+CMD ["bash"]

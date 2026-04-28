@@ -121,6 +121,7 @@ def main() -> None:
     # -------------------------------------------------------------------------
     sweep_depths = MAX_DEPTHS[:2] if args.smoke_test else MAX_DEPTHS
     sweep_leafs  = MIN_SAMPLES_LEAFS[:1] if args.smoke_test else MIN_SAMPLES_LEAFS
+    criterion    = "absolute_error" if variant == "normal_raw" else "squared_error"
 
     tracker = ExperimentTracker(
         model_type="DecisionTree",
@@ -131,6 +132,7 @@ def main() -> None:
         config={
             "max_depths_searched": sweep_depths,
             "min_samples_leafs_searched": sweep_leafs,
+            "criterion": criterion,
             "feature_cols": FEATURE_COLS,
             "target_column": target_col,
         },
@@ -154,9 +156,11 @@ def main() -> None:
 
     for max_depth in sweep_depths:
         for min_samples_leaf in sweep_leafs:
+            criterion = "absolute_error" if variant == "normal_raw" else "squared_error"
             dt = DecisionTreeRegressor(
                 max_depth=max_depth,
                 min_samples_leaf=min_samples_leaf,
+                criterion=criterion,
                 random_state=42,
             )
             dt.fit(X_train, y_train, sample_weight=sw_train)

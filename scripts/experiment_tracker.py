@@ -169,7 +169,7 @@ class ExperimentTracker:
         if run_name:
             folder_name = f"{folder_name}_{run_name}"
 
-        self.run_dir = RUNS_DIR / folder_name
+        self.run_dir = RUNS_DIR.resolve() / folder_name
         self.run_dir.mkdir(parents=True, exist_ok=True)
 
         self._start_time = time.time()
@@ -364,7 +364,7 @@ class ExperimentTracker:
 
     @staticmethod
     def _append_to_master_log(row: dict[str, Any]) -> None:
-        MASTER_LOG.parent.mkdir(parents=True, exist_ok=True)
+        MASTER_LOG.parent.resolve().mkdir(parents=True, exist_ok=True)
 
         new_row = pd.DataFrame([row])
 

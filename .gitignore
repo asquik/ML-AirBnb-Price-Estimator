@@ -9,32 +9,23 @@ env/
 build/
 dist/
 *.egg-info/
-
 # VS Code
 .vscode/
-
 # macOS
 .DS_Store
-
 # Logs
 logs/
 *.log
 extraction_log.txt
-
 # Sensitive / local
 .env
-
 # Jupyter
 .ipynb_checkpoints/
-
 # Data (generated from data_processor.py; regenerate with scripts, don't commit)
 data/
-
 # Images (if you download many images, keep them out of git)
 images/
-
 # Script outputs and artifacts
 outputs/
-
 # Virtual environment
 .venv/

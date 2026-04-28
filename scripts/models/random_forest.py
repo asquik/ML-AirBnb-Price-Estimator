@@ -115,6 +115,7 @@ def main() -> None:
     sweep_n_est   = [50]          if args.smoke_test else N_ESTIMATORS_LIST
     sweep_depths  = [5]           if args.smoke_test else MAX_DEPTHS
     sweep_leafs   = [10]          if args.smoke_test else MIN_SAMPLES_LEAFS
+    criterion     = "absolute_error" if variant == "normal_raw" else "squared_error"
 
     tracker = ExperimentTracker(
         model_type="RandomForest",
@@ -126,6 +127,7 @@ def main() -> None:
             "n_estimators_searched": sweep_n_est,
             "max_depths_searched":   [str(d) for d in sweep_depths],
             "min_samples_leafs_searched": sweep_leafs,
+            "criterion": criterion,
             "feature_cols": FEATURE_COLS,
             "target_column": target_col,
         },
@@ -157,6 +159,7 @@ def main() -> None:
                     n_estimators=n_est,
                     max_depth=max_depth,
                     min_samples_leaf=min_leaf,
+                    criterion=criterion,
                     n_jobs=-1,
                     random_state=42,
                 )
