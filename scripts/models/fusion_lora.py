@@ -392,8 +392,12 @@ def predict_raw(
     true_np  = np.concatenate(all_true)
 
     if target_col == "price_bc" and price_transformer is not None:
-        preds_np = price_transformer.inverse_transform(preds_np.reshape(-1, 1)).ravel()
-        true_np  = price_transformer.inverse_transform(true_np.reshape(-1, 1)).ravel()
+        preds_np = np.clip(preds_np, -50, 50)
+        preds_np = np.nan_to_num(
+            price_transformer.inverse_transform(preds_np.reshape(-1, 1)).ravel(),
+            nan=1e6, posinf=1e6, neginf=0.0,
+        )
+        true_np = price_transformer.inverse_transform(true_np.reshape(-1, 1)).ravel()
 
     return true_np, preds_np
 

@@ -58,7 +58,11 @@ def load_data(variant: str):
 
 
 def to_raw(preds, pt):
-    return pt.inverse_transform(preds.reshape(-1, 1)).ravel() if pt is not None else preds
+    if pt is None:
+        return preds
+    clipped = np.clip(preds, -50, 50)
+    raw = pt.inverse_transform(clipped.reshape(-1, 1)).ravel()
+    return np.nan_to_num(raw, nan=1e6, posinf=1e6, neginf=0.0)
 
 
 def compute_metrics(y_true, y_pred) -> dict:
