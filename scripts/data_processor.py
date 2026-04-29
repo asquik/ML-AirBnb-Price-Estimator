@@ -30,6 +30,32 @@ DEFAULT_NUMERIC_COLUMNS = [
     "number_of_reviews",
 ]
 
+# Each entry is (feature_name, [keyword_variants_en_fr]).
+# A listing matches if ANY variant appears in its full_text (case-insensitive).
+DEFAULT_KEYWORD_GROUPS: list[tuple[str, list[str]]] = [
+    ("kw_metro",          ["metro", "métro", "subway", "station de métro"]),
+    ("kw_parking",        ["parking", "stationnement", "garage", "indoor parking", "stationnement intérieur"]),
+    ("kw_wifi",           ["wifi", "wi-fi", "internet", "wireless"]),
+    ("kw_kitchen",        ["kitchen", "cuisine", "kitchenette"]),
+    ("kw_washer",         ["washer", "washing machine", "laveuse", "laveuse-sécheuse", "laundry"]),
+    ("kw_gym",            ["gym", "fitness", "exercise room", "salle de sport", "salle d'entraînement"]),
+    ("kw_pool",           ["pool", "swimming pool", "piscine"]),
+    ("kw_balcony",        ["balcony", "balcon", "terrace", "terrasse", "patio", "rooftop"]),
+    ("kw_air_conditioning", ["air conditioning", "air conditioned", "climatisation", "climatisé", "a/c", "ac unit"]),
+    ("kw_near_park",      ["park", "parc", "nature", "green space", "espace vert"]),
+    ("kw_near_bars",      ["bar", "bars", "nightlife", "restaurant", "café", "coffee shop", "bistro"]),
+    ("kw_downtown",       ["downtown", "centre-ville", "old montreal", "vieux-montréal", "vieux montréal",
+                           "old port", "vieux port", "plateau", "mile end", "griffintown"]),
+    ("kw_near_university", ["university", "université", "mcgill", "concordia", "udem", "uqam", "polytechnique"]),
+    ("kw_near_airport",   ["airport", "aéroport", "trudeau", "dorval", "yul"]),
+    ("kw_pet_friendly",   ["pet", "pets allowed", "dog", "cat", "animal", "animaux", "animaux acceptés"]),
+    ("kw_family",         ["family", "famille", "kid", "child", "children", "enfant", "bébé", "baby", "crib", "lit bébé"]),
+    ("kw_luxury",         ["luxury", "luxe", "upscale", "premium", "high-end", "designer", "penthouse"]),
+    ("kw_new",            ["newly renovated", "rénové", "brand new", "modern", "moderne", "contemporary", "contemporain"]),
+    ("kw_quiet",          ["quiet", "calme", "tranquil", "tranquille", "peaceful", "paisible"]),
+    ("kw_view",           ["view", "vue", "panoramic", "panoramique", "city view", "vue sur la ville", "river view"]),
+]
+
 DEFAULT_TARGET_COLUMN = "price"
 DEFAULT_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 DEFAULT_SAMPLE_WEIGHT_COLUMN = "sample_weight"
@@ -204,6 +230,30 @@ def apply_language_detector(
         return any(character in normalized for character in accent_chars)
 
     result["is_french"] = result[description_column].map(_is_french).astype(bool)
+    return result
+
+
+def fit_keyword_features(
+    train_df: pd.DataFrame,
+    text_col: str = "full_text",
+    keyword_groups: list[tuple[str, list[str]]] | None = None,
+) -> dict[str, list[str]]:
+    """Return the keyword map as an artifact (stateless — no train-data learning needed)."""
+    groups = keyword_groups if keyword_groups is not None else DEFAULT_KEYWORD_GROUPS
+    return {name: [kw.lower() for kw in variants] for name, variants in groups}
+
+
+def apply_keyword_features(
+    df: pd.DataFrame,
+    keyword_features_artifact: dict[str, list[str]],
+    text_col: str = "full_text",
+) -> pd.DataFrame:
+    """Add one binary (0/1 int) column per keyword group based on text_col."""
+    result = _copy_df(df)
+    lowered = result[text_col].fillna("").astype(str).str.lower()
+    for feature_name, variants in keyword_features_artifact.items():
+        pattern = "|".join(re.escape(v) for v in variants)
+        result[feature_name] = lowered.str.contains(pattern, regex=True).astype(int)
     return result
 
 
@@ -449,6 +499,11 @@ def _split_and_export_variant(
 ) -> dict[str, object]:
     train_df, val_df, test_df = split_data_80_10_10(variant_df, seed=42)
 
+    keyword_features_artifact = fit_keyword_features(train_df, text_col="full_text")
+    train_df = apply_keyword_features(train_df, keyword_features_artifact, text_col="full_text")
+    val_df = apply_keyword_features(val_df, keyword_features_artifact, text_col="full_text")
+    test_df = apply_keyword_features(test_df, keyword_features_artifact, text_col="full_text")
+
     room_type_weight_map = fit_room_type_weights(train_df, room_type_column="room_type")
     box_cox_transformer = fit_box_cox_transformer(train_df[DEFAULT_TARGET_COLUMN])
     numeric_imputer_artifact = fit_numeric_imputer(train_df, numeric_columns=DEFAULT_NUMERIC_COLUMNS)
@@ -476,10 +531,12 @@ def _split_and_export_variant(
     val_df = apply_categorical_encoder(val_df, categorical_encoder_artifact, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
     test_df = apply_categorical_encoder(test_df, categorical_encoder_artifact, categorical_columns=DEFAULT_CATEGORICAL_COLUMNS)
 
+    keyword_columns = list(keyword_features_artifact.keys())
     feature_columns = [
         *DEFAULT_CATEGORICAL_COLUMNS,
         *DEFAULT_NUMERIC_COLUMNS,
         DEFAULT_SEASON_COLUMN,
+        *keyword_columns,
     ]
 
     train_tabular = assemble_tabular_output(
@@ -512,6 +569,7 @@ def _split_and_export_variant(
     save_artifact(categorical_encoder_artifact, output_dir / f"tabular_encoders{suffix}.joblib")
     save_artifact(numeric_scaler_artifact, output_dir / f"numeric_scaler{suffix}.joblib")
     save_artifact(room_type_weight_map, output_dir / f"room_type_weights{suffix}.joblib")
+    save_artifact(keyword_features_artifact, output_dir / f"keyword_features{suffix}.joblib")
 
     return {
         "train_df": train_df,
@@ -526,6 +584,7 @@ def _split_and_export_variant(
             "categorical_encoder": categorical_encoder_artifact,
             "numeric_scaler": numeric_scaler_artifact,
             "room_type_weight_map": room_type_weight_map,
+            "keyword_features": keyword_features_artifact,
         },
     }
 

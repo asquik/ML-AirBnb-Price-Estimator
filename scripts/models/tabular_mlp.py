@@ -52,6 +52,11 @@ FEATURE_COLS = [
     "number_of_reviews",
     "season_ordinal",
     "has_valid_image",
+    # bilingual keyword binary features
+    "kw_metro", "kw_parking", "kw_wifi", "kw_kitchen", "kw_washer",
+    "kw_gym", "kw_pool", "kw_balcony", "kw_air_conditioning", "kw_near_park",
+    "kw_near_bars", "kw_downtown", "kw_near_university", "kw_near_airport",
+    "kw_pet_friendly", "kw_family", "kw_luxury", "kw_new", "kw_quiet", "kw_view",
 ]
 
 CATEGORICAL_COLS = [

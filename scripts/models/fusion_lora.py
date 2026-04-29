@@ -184,7 +184,14 @@ def _build_fusion_head(input_dim: int, hidden_sizes: list[int]) -> nn.Module:
 
 
 class FusionLoRAModel(nn.Module):
-    def __init__(self, image_model_id: str, tabular_dim: int, fusion_head_sizes: list[int]) -> None:
+    def __init__(
+        self,
+        image_model_id: str,
+        tabular_dim: int,
+        fusion_head_sizes: list[int],
+        text_proj_dim: int = 0,
+        image_proj_dim: int = 0,
+    ) -> None:
         super().__init__()
 
         self.text_encoder  = AutoModel.from_pretrained(TEXT_MODEL_ID, use_safetensors=True)
@@ -205,12 +212,27 @@ class FusionLoRAModel(nn.Module):
         text_dim  = self.text_encoder.config.hidden_size          # 768 for DistilBERT
         image_dim = self.image_encoder.config.hidden_size         # 768 for both CLIP variants
 
+        # Optional per-modality projection heads (text_proj_dim=0 means no projection)
+        if text_proj_dim > 0:
+            self.text_proj = nn.Sequential(nn.Linear(text_dim, text_proj_dim), nn.ReLU())
+            text_fuse_dim  = text_proj_dim
+        else:
+            self.text_proj = None
+            text_fuse_dim  = text_dim
+
+        if image_proj_dim > 0:
+            self.image_proj = nn.Sequential(nn.Linear(image_dim, image_proj_dim), nn.ReLU())
+            image_fuse_dim  = image_proj_dim
+        else:
+            self.image_proj = None
+            image_fuse_dim  = image_dim
+
         self.tabular_branch = nn.Sequential(
             nn.Linear(tabular_dim, TABULAR_EMBED_DIM),
             nn.ReLU(),
         )
 
-        fusion_input_dim = text_dim + image_dim + TABULAR_EMBED_DIM
+        fusion_input_dim = text_fuse_dim + image_fuse_dim + TABULAR_EMBED_DIM
         self.fusion_head = _build_fusion_head(fusion_input_dim, fusion_head_sizes)
 
     def forward(
@@ -222,9 +244,13 @@ class FusionLoRAModel(nn.Module):
     ) -> torch.Tensor:
         text_out   = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
         text_embed = text_out.last_hidden_state[:, 0, :]          # [CLS]
+        if self.text_proj is not None:
+            text_embed = self.text_proj(text_embed)
 
         img_out    = self.image_encoder(pixel_values=image)
         img_embed  = img_out.pooler_output                        # (B, image_dim)
+        if self.image_proj is not None:
+            img_embed = self.image_proj(img_embed)
 
         tab_embed  = self.tabular_branch(tabular)
 
@@ -265,6 +291,12 @@ def apply_lora(model: FusionLoRAModel, lora_rank: int) -> int:
         p.requires_grad = True
     for p in model.fusion_head.parameters():
         p.requires_grad = True
+    if model.text_proj is not None:
+        for p in model.text_proj.parameters():
+            p.requires_grad = True
+    if model.image_proj is not None:
+        for p in model.image_proj.parameters():
+            p.requires_grad = True
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total     = sum(p.numel() for p in model.parameters())
@@ -277,7 +309,8 @@ def apply_lora(model: FusionLoRAModel, lora_rank: int) -> int:
 # ---------------------------------------------------------------------------
 
 def weighted_mse(preds: torch.Tensor, targets: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-    return ((preds.squeeze(1) - targets) ** 2 * weights).mean()
+    loss = ((preds.squeeze(1) - targets) ** 2 * weights).mean()
+    return torch.nan_to_num(loss, nan=1e6, posinf=1e6, neginf=1e6)
 
 
 def run_epoch(
@@ -387,12 +420,16 @@ def main() -> None:
                         choices=list(FUSION_HEADS.keys()))
     parser.add_argument("--batch-size",  type=int, default=16, dest="batch_size")
     parser.add_argument("--accum-steps", type=int, default=2,  dest="accum_steps")
-    parser.add_argument("--lr-adapters", type=float, default=2e-5, dest="lr_adapters",
+    parser.add_argument("--lr-adapters", type=float, default=5e-5, dest="lr_adapters",
                         help="LR for LoRA adapter parameters and tabular branch")
-    parser.add_argument("--lr-head",     type=float, default=5e-4, dest="lr_head",
+    parser.add_argument("--lr-head",     type=float, default=1e-4, dest="lr_head",
                         help="LR for fusion head (can be higher — trained from scratch)")
     parser.add_argument("--max-epochs",  type=int, default=MAX_EPOCHS, dest="max_epochs")
     parser.add_argument("--workers",     type=int, default=4)
+    parser.add_argument("--text-proj-dim",  type=int, default=0, dest="text_proj_dim",
+                        help="Project text CLS embedding to this dim before fusion (0=disabled)")
+    parser.add_argument("--image-proj-dim", type=int, default=0, dest="image_proj_dim",
+                        help="Project image pooler output to this dim before fusion (0=disabled)")
     parser.add_argument("--run-name",    type=str, default="", dest="run_name")
     parser.add_argument("--smoke-test",  action="store_true", dest="smoke_test")
     args = parser.parse_args()
@@ -466,6 +503,8 @@ def main() -> None:
             "clip_model":   clip_id,
             "text_model":   TEXT_MODEL_ID,
             "tabular_embed_dim": TABULAR_EMBED_DIM,
+            "text_proj_dim":    args.text_proj_dim,
+            "image_proj_dim":   args.image_proj_dim,
             "fusion_head_sizes": head_sizes,
             "target_column": target_col,
         },
@@ -505,6 +544,8 @@ def main() -> None:
         image_model_id=clip_id,
         tabular_dim=len(TABULAR_COLS),
         fusion_head_sizes=head_sizes,
+        text_proj_dim=args.text_proj_dim,
+        image_proj_dim=args.image_proj_dim,
     ).to(device)
 
     trainable_params = apply_lora(model, args.lora_rank)
@@ -519,7 +560,9 @@ def main() -> None:
     adapter_params = [p for p in model.text_encoder.parameters()  if p.requires_grad] + \
                      [p for p in model.image_encoder.parameters()  if p.requires_grad]
     head_params    = list(model.tabular_branch.parameters()) + \
-                     list(model.fusion_head.parameters())
+                     list(model.fusion_head.parameters()) + \
+                     (list(model.text_proj.parameters())  if model.text_proj  is not None else []) + \
+                     (list(model.image_proj.parameters()) if model.image_proj is not None else [])
 
     optimizer = torch.optim.AdamW([
         {"params": adapter_params, "lr": args.lr_adapters, "weight_decay": 1e-4},

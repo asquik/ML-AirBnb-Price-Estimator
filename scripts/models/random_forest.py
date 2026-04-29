@@ -32,6 +32,11 @@ FEATURE_COLS = [
     "accommodates", "bathrooms", "bedrooms", "beds", "host_total_listings_count",
     "latitude", "longitude", "minimum_nights", "availability_365",
     "number_of_reviews", "season_ordinal", "has_valid_image",
+    # bilingual keyword binary features
+    "kw_metro", "kw_parking", "kw_wifi", "kw_kitchen", "kw_washer",
+    "kw_gym", "kw_pool", "kw_balcony", "kw_air_conditioning", "kw_near_park",
+    "kw_near_bars", "kw_downtown", "kw_near_university", "kw_near_airport",
+    "kw_pet_friendly", "kw_family", "kw_luxury", "kw_new", "kw_quiet", "kw_view",
 ]
 
 # Hyperparameter grid
@@ -155,6 +160,9 @@ def main() -> None:
     for n_est in sweep_n_est:
         for max_depth in sweep_depths:
             for min_leaf in sweep_leafs:
+                depth_label = str(max_depth) if max_depth is not None else "None"
+                print(f"  Fitting n_est={n_est} max_depth={depth_label} min_leaf={min_leaf} ...",
+                      flush=True)
                 rf = RandomForestRegressor(
                     n_estimators=n_est,
                     max_depth=max_depth,
@@ -168,7 +176,6 @@ def main() -> None:
                 val_pred_raw = to_raw_dollars(rf.predict(X_val), price_transformer)
                 val_metrics  = compute_metrics(y_val_raw, val_pred_raw)
 
-                depth_label = str(max_depth) if max_depth is not None else "None"
                 print(
                     f"{n_est:<8} {depth_label:<12} {min_leaf:<10} "
                     f"{val_metrics['rmse']:<14.2f} {val_metrics['mae']:<12.2f} {val_metrics['r2']:<8.4f}"

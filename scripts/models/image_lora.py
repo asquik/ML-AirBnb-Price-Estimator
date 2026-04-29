@@ -195,7 +195,8 @@ def apply_lora(model: ImageLoRAModel, lora_rank: int) -> int:
 # ---------------------------------------------------------------------------
 
 def weighted_mse(preds, targets, weights):
-    return ((preds.squeeze(1) - targets) ** 2 * weights).mean()
+    loss = ((preds.squeeze(1) - targets) ** 2 * weights).mean()
+    return torch.nan_to_num(loss, nan=1e6, posinf=1e6, neginf=1e6)
 
 
 def run_epoch(model, loader, optimizer, device, accum_steps, training: bool) -> float:
