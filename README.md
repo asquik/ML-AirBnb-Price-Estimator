@@ -1,76 +1,84 @@
 # Multi‑Modal Airbnb Price Predictor — Montreal
 
-A compact, reproducible project that predicts nightly Airbnb price using a late‑fusion multimodal model (images + listing text + tabular features). Implementation focuses on clarity, reproducibility and fast iteration.
+A compact, reproducible project that predicts nightly Airbnb prices using a late‑fusion multimodal model (images + listing text + tabular features). Implementation focuses on clarity, reproducibility, and fast iteration utilizing parameter-efficient fine-tuning (LoRA).
 
-## Current state
-- EDA and report are available (`outputs/report.md`, `outputs/figures/`).
-- A resumable image downloader is provided (`scripts/download_images.py`).
-- Decision tracking log initialized at `decision_log.md`.
-- Data processor established with comprehensive unit tests (`scripts/data_processor.py`, `tests/test_data_processor.py`).
-- Experiment workflow and timeline documented in `WORKFLOW.md`.
-- **Next step:** Build Decision Tree regression baseline as first model (Week 1-2 of timeline), using deterministic train/test split from parquets.
+## 🚀 Quickstart: Local Python Environment
 
-## Motivation
-- Estimate the marginal value contributed by listing images and textual quality beyond standard tabular features (the "curb appeal" effect).
-- Apply transfer learning with frozen vision+language backbones and a lightweight fusion head for regression.
+This project is designed to run natively in a Python virtual environment. 
 
-## Quickstart
-1. Create a Python environment and install dependencies:
-   ```bash
-   python -m venv .venv
-   .venv\Scripts\python -m pip install -r requirements.txt
-   ```
-2. Reproduce EDA outputs:
-   ```bash
-   .venv\Scripts\python scripts/eda.py
-   ```
-3. Inspect the committed report at `outputs/report.md`.
+### 1. Environment Setup
+Initialize your environment and install the required dependencies. The LoRA requirements contain the full stack for multimodal training.
 
-4. Generate deterministic train/test split (parquet format):
-   ```bash
-   python3 scripts/data_processor.py
-   ```
-   This creates `data/train.parquet` (80%) and `data/test.parquet` (20%).
+```bash
+python -m venv .venv
+source .venv/Scripts/activate  # On Windows Git Bash/CMD
+pip install -r requirements-lora.txt
+```
 
-5. Train the simple tabular Decision Tree baseline:
-  ```bash
-  python3 scripts/train_tabular_baseline.py
-  ```
+*(Tip: You can append `--help` to any of the Python scripts below to see a full list of accepted arguments and configuration options.)*
 
-## Decision log and model-run workflow
-- Record every meaningful preprocessing/modeling choice in `decision_log.md`.
-- Each baseline run appends metrics and configuration to `outputs/model_runs.csv`.
-- Start simple (decision tree), then compare alternative model compositions using the same run log.
+### 2. Download Raw Images
+Before processing the dataset, fetch the images from the URLs provided in the raw insideAirbnb data. The downloader supports resuming and pacing to avoid rate limits.
 
-## Downloader (resume‑safe & paced)
-- Basic run (resume-aware, applies EDA price filter by default):
-  ```bash
-  .venv\Scripts\python scripts/download_images.py
-  ```
-- Spread downloads evenly across a duration (e.g. 24 hours):
-  ```bash
-  .venv\Scripts\python scripts/download_images.py --duration-hours 24 --min-interval 10
-  ```
-- Resize downloaded images to 224×224 using `--resize 224`.
+```bash
+# Basic run (applies EDA price filter by default)
+python scripts/download_images.py
 
-## Repository layout (key files)
-- `WORKFLOW.md` — detailed experiment timeline and submission plan  
-- `Context.md` — project context and experimental plan
-- `decision_log.md` — log of all modeling decisions and results
-- `scripts/data_processor.py` — unified data pipeline (loads CSVs → outputs clean master DataFrame)
-- `scripts/download_images.py` — resumable image downloader with pacing
-- `scripts/train_tabular_baseline.py` — Decision Tree baseline trainer with run logging
-- `tests/test_data_processor.py` — unit tests for data processor
-- `outputs/` — EDA report, figures, model runs CSV
+# Example: Spread downloads evenly across 24 hours
+python scripts/download_images.py --duration-hours 24 --min-interval 10
+```
 
-## Design principles
-- Minimal, readable PyTorch code and standard Dataset/Dataloader patterns.
-- Freeze large pre-trained backbones for compute efficiency and reproducible baselines.
-- Maintain separation between data processing, dataset, model, and training logic.
+### 3. Data Processing (The "Pure Function" Pipeline)
+The data processor acts as the source of truth, converting raw CSV snapshots into ready-to-train deterministic splits.
 
-## Next deliverables
-- **Week 1-2:** Decision Tree regression baseline with hyperparameter sweep (see `WORKFLOW.md` for timeline)  
-- **Weeks 3-4:** Optional text branch (BERT embeddings)  
-- **Weeks 5-6:** Optional image branch (CLIP embeddings)  
-- **Week 8:** Compile all experiments into single submission notebook with Google Drive data source
+```bash
+python scripts/data_processor.py
+```
+**Outputs:** This script generates over 10 distinct `.parquet` files in the `data/` directory, representing an 80/10/10 split (Train/Val/Test) across both the normal dataset and a `cleaned` variant (filtered for prices strictly between $50 and $1000). It also exports corresponding `_tabular.parquet` versions with pre-scaled numeric features and encoded categoricals.
 
+### 4. Image Preprocessing
+Standardize the downloaded images for the vision model. This script creates dual-resolution outputs and generates neutral, standardized placeholders for any missing or corrupt image files to ensure pipeline integrity.
+
+```bash
+python scripts/image_processor.py
+```
+
+### 5. Model Training (Ablation & Fusion)
+Train models ranging from simple baselines to complex multi-modal networks. Metrics (RMSE, MAE, R²) are automatically logged to `outputs/model_runs.csv`.
+
+**Example: Run the Late-Fusion LoRA Model (Priority 1)**
+```bash
+python scripts/models/fusion_lora.py \
+  --variant normal_bc \
+  --image-size 224 \
+  --lora-rank 16 \
+  --fusion-head deep_256 \
+  --batch-size 16 \
+  --accum-steps 2 \
+  --workers 4 \
+  --run-name priority1_local
+```
+
+---
+
+## 🧠 Available Models Catalog
+
+The `scripts/models/` directory contains isolated execution scripts for various architectures, allowing for clean ablation studies.
+
+### Baseline & Tabular Models
+*   **`decision_tree.py`**: Fast, interpretable baseline regression.
+*   **`random_forest.py`**: Ensemble tree baseline.
+*   **`gradient_boosting.py`**: Standard GBM regression.
+*   **`lightgbm_model.py`**: High-performance gradient boosting.
+*   **`ridge_model.py` / `polynomial_ridge.py`**: Linear baselines.
+*   **`tabular_mlp.py`**: Deep learning baseline using only tabular features.
+
+### Unimodal Deep Learning
+*   **`text_mlp.py`**: Trains on text embeddings (DistilBERT) with frozen weights.
+*   **`text_lora.py`**: Fine-tunes the text backbone using Low-Rank Adaptation.
+*   **`image_mlp.py`**: Trains on image embeddings (CLIP) with frozen weights.
+*   **`image_lora.py`**: Fine-tunes the vision backbone using Low-Rank Adaptation.
+
+### Multimodal Late Fusion
+*   **`fusion_mlp.py`**: Concatenates frozen text, vision, and tabular embeddings into a trainable head.
+*   **`fusion_lora.py`**: The flagship model. Performs end-to-end training by applying LoRA adapters to both the DistilBERT and CLIP backbones simultaneously while training the late-fusion head.
