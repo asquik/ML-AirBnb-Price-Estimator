@@ -6,7 +6,7 @@
 #   docker rm -f lora_train 2>/dev/null; \
 #   docker run -d --name lora_train \
 #     --gpus all --shm-size=8g \
-#     -v /home/admin/ML-AirBnb-Price-Estimator:/workspace \
+#     -v $(pwd):/workspace \
 #     -w /workspace \
 #     -v /mnt/nvme_data/linux_sys/ml:/hf_cache \
 #     -e HF_HOME=/hf_cache \

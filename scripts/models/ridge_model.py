@@ -18,24 +18,12 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiment_tracker import ExperimentTracker
+from training_utils import SKLEARN_FEATURE_COLS as FEATURE_COLS, compute_metrics, to_raw_dollars
 
 DATA_DIR = Path("data")
-
-FEATURE_COLS = [
-    "room_type", "neighbourhood_cleansed", "property_type", "instant_bookable",
-    "accommodates", "bathrooms", "bedrooms", "beds", "host_total_listings_count",
-    "latitude", "longitude", "minimum_nights", "availability_365",
-    "number_of_reviews", "season_ordinal", "has_valid_image",
-    # bilingual keyword binary features
-    "kw_metro", "kw_parking", "kw_wifi", "kw_kitchen", "kw_washer",
-    "kw_gym", "kw_pool", "kw_balcony", "kw_air_conditioning", "kw_near_park",
-    "kw_near_bars", "kw_downtown", "kw_near_university", "kw_near_airport",
-    "kw_pet_friendly", "kw_family", "kw_luxury", "kw_new", "kw_quiet", "kw_view",
-]
 
 ALPHAS = [0.01, 0.1, 1.0, 10.0, 100.0, 1000.0]
 
@@ -50,17 +38,6 @@ def load_data(variant: str):
         price_transformer = joblib.load(DATA_DIR / f"price_transformer{suffix}.joblib")
     return train_df, val_df, test_df, price_transformer
 
-
-def to_raw(preds, pt):
-    return pt.inverse_transform(preds.reshape(-1, 1)).ravel() if pt is not None else preds
-
-
-def compute_metrics(y_true, y_pred) -> dict:
-    return {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "mae":  float(mean_absolute_error(y_true, y_pred)),
-        "r2":   float(r2_score(y_true, y_pred)),
-    }
 
 
 def main() -> None:
@@ -78,7 +55,7 @@ def main() -> None:
     print(f"Ridge  |  variant={variant}  |  target={target_col}")
     print(f"{'='*70}\n")
 
-    train_df, val_df, test_df, pt = load_data(variant)
+    train_df, val_df, test_df, price_transformer = load_data(variant)
 
     if args.smoke_test:
         print("  [SMOKE TEST] truncating all splits to 100 rows")
@@ -105,8 +82,8 @@ def main() -> None:
         config={"alphas_searched": sweep_alphas, "feature_cols": FEATURE_COLS,
                 "target_column": target_col},
     )
-    if pt is not None:
-        tracker.set_box_cox_lambda(float(pt.lambdas_[0]))
+    if price_transformer is not None:
+        tracker.set_box_cox_lambda(float(price_transformer.lambdas_[0]))
 
     print(f"\nSweeping {len(sweep_alphas)} alpha values on val set...")
     print(f"{'alpha':<12} {'Val RMSE $':<14} {'Val MAE $':<12} {'Val R²':<8}")
@@ -118,7 +95,7 @@ def main() -> None:
     for alpha in sweep_alphas:
         model = Ridge(alpha=alpha)
         model.fit(X_train, y_train, sample_weight=sw_train)
-        val_pred_raw = to_raw(model.predict(X_val), pt)
+        val_pred_raw = to_raw_dollars(model.predict(X_val), price_transformer)
         vm = compute_metrics(y_val_raw, val_pred_raw)
         print(f"{alpha:<12} {vm['rmse']:<14.2f} {vm['mae']:<12.2f} {vm['r2']:<8.4f}")
         if vm["rmse"] < best_val_rmse:
@@ -130,9 +107,9 @@ def main() -> None:
     print("-" * 50)
     print(f"\n✅ Best: alpha={best_params['alpha']}  |  Val RMSE: ${best_val_rmse:.2f}")
 
-    train_pred_raw = to_raw(best_model.predict(X_train), pt)
-    val_pred_raw   = to_raw(best_model.predict(X_val),   pt)
-    test_pred_raw  = to_raw(best_model.predict(X_test),  pt)
+    train_pred_raw = to_raw_dollars(best_model.predict(X_train), price_transformer)
+    val_pred_raw   = to_raw_dollars(best_model.predict(X_val),   pt)
+    test_pred_raw  = to_raw_dollars(best_model.predict(X_test),  pt)
 
     train_m = compute_metrics(y_train_raw, train_pred_raw)
     val_m   = compute_metrics(y_val_raw,   val_pred_raw)

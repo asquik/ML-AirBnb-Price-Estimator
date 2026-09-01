@@ -20,24 +20,12 @@ import joblib
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiment_tracker import ExperimentTracker
+from training_utils import SKLEARN_FEATURE_COLS as FEATURE_COLS, compute_metrics, to_raw_dollars
 
 DATA_DIR = Path("data")
-
-FEATURE_COLS = [
-    "room_type", "neighbourhood_cleansed", "property_type", "instant_bookable",
-    "accommodates", "bathrooms", "bedrooms", "beds", "host_total_listings_count",
-    "latitude", "longitude", "minimum_nights", "availability_365",
-    "number_of_reviews", "season_ordinal", "has_valid_image",
-    # bilingual keyword binary features
-    "kw_metro", "kw_parking", "kw_wifi", "kw_kitchen", "kw_washer",
-    "kw_gym", "kw_pool", "kw_balcony", "kw_air_conditioning", "kw_near_park",
-    "kw_near_bars", "kw_downtown", "kw_near_university", "kw_near_airport",
-    "kw_pet_friendly", "kw_family", "kw_luxury", "kw_new", "kw_quiet", "kw_view",
-]
 
 # Hyperparameter grid
 N_ESTIMATORS_LIST = [100, 200, 400]
@@ -57,19 +45,6 @@ def load_data(variant: str):
 
     return train_df, val_df, test_df, price_transformer
 
-
-def to_raw_dollars(preds: np.ndarray, price_transformer) -> np.ndarray:
-    if price_transformer is None:
-        return preds
-    return price_transformer.inverse_transform(preds.reshape(-1, 1)).ravel()
-
-
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    return {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "mae":  float(mean_absolute_error(y_true, y_pred)),
-        "r2":   float(r2_score(y_true, y_pred)),
-    }
 
 
 def main() -> None:

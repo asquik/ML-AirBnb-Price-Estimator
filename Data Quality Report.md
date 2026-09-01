@@ -79,7 +79,7 @@ When filtering the data to *only* short-term rentals (min_nights < 31), the filt
 **Why three splits instead of two?**
 - **Prevents data leakage:** Tuning hyperparameters on the test set makes it "contaminated"—test metrics become inflated and unreliable
 - **Fair model selection:** Validation set allows comparing multiple configurations without peeking at true test performance
-- **True generalization estimate:** Test set remains pristine until the final submission, providing an honest estimate of model performance on completely unseen data
+- **True generalization estimate:** Test set remains pristine until the final evaluation, providing an honest estimate of model performance on completely unseen data
 - **Industry standard:** 80/10/10 is a common, well-justified proportion for datasets of our size
 
 **Encoder/Scaler Fitting (No Leakage):**

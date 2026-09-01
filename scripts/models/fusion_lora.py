@@ -38,27 +38,21 @@ import torch
 import torch.nn as nn
 from PIL import Image
 from peft import LoraConfig, TaskType, get_peft_model
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.utils.data import DataLoader, Dataset
 from transformers import AutoModel, AutoTokenizer, CLIPProcessor, CLIPVisionModel
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=FutureWarning, module="transformers")
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from experiment_tracker import ExperimentTracker
+from training_utils import TABULAR_BASE_COLS as TABULAR_COLS, compute_metrics
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 DATA_DIR   = Path("data")
 IMAGE_BASE = Path("images")
-
-TABULAR_COLS = [
-    "room_type", "neighbourhood_cleansed", "property_type", "instant_bookable",
-    "accommodates", "bathrooms", "bedrooms", "beds", "host_total_listings_count",
-    "latitude", "longitude", "minimum_nights", "availability_365",
-    "number_of_reviews", "season_ordinal", "has_valid_image",
-]
 
 TEXT_MODEL_ID  = "distilbert-base-multilingual-cased"
 CLIP_224_ID    = "openai/clip-vit-base-patch32"
@@ -401,13 +395,6 @@ def predict_raw(
 
     return true_np, preds_np
 
-
-def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    return {
-        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "mae":  float(mean_absolute_error(y_true, y_pred)),
-        "r2":   float(r2_score(y_true, y_pred)),
-    }
 
 
 # ---------------------------------------------------------------------------

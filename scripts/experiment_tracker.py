@@ -81,49 +81,9 @@ VALID_MODALITIES = {"tabular", "tab+text", "tab+image", "tab+text+image"}
 
 class ExperimentTracker:
     """
-    Usage pattern (every training script follows this exactly):
-
-        tracker = ExperimentTracker(
-            model_type="LightGBM",
-            modalities="tabular",
-            variant="cleaned_raw",
-            run_name="leaves128_lr001",         # from --run-name CLI arg
-            config={"num_leaves": 128, ...},    # model hyperparameters
-            # DL-only optional args:
-            fusion_head=None,
-            image_size=None,
-            lora_applied_to=None,
-            lora_rank=None,
-            batch_size=None,
-            dataloader_workers=None,
-            device_used=None,
-        )
-
-        # DL only — call once per epoch inside your training loop:
-        tracker.log_epoch(train_loss=0.34, val_loss=0.41, val_rmse_raw=82.3)
-
-        # DL only — call when val loss improves:
-        tracker.save_best_model(model)
-
-        # Call once at the very end, after all evaluation is complete:
-        tracker.finish(
-            train_metrics={"rmse": 91.2, "mae": 58.1, "r2": 0.41},
-            val_metrics={"rmse": 88.4, "mae": 55.2, "r2": 0.43},
-            test_metrics={"rmse": 87.1, "mae": 54.0, "r2": 0.44},
-            predictions={
-                "train_y_true": arr, "train_y_pred": arr,
-                "val_y_true": arr,   "val_y_pred": arr,
-                "test_y_true": arr,  "test_y_pred": arr,
-            },
-            trainable_parameters=5000,
-            training_time_minutes=12.4,
-            best_hyperparams={"num_leaves": 128, "learning_rate": 0.01},
-            # optional:
-            peak_vram_gb=None,
-            extra_artifacts={"feature_importance.json": {"room_type": 0.14, ...}},
-        )
-
-    All metrics passed to finish() must already be in raw Canadian dollars.
+    Experiment tracking for all training scripts.
+    Creates run folders, logs metrics per epoch, saves artifacts,
+    and appends one row to outputs/master_runs_log.csv on finish().
     """
 
     def __init__(
@@ -234,10 +194,7 @@ class ExperimentTracker:
         val_loss: float,
         val_rmse_raw: float,
     ) -> None:
-        """
-        Call once per epoch, after validation. val_rmse_raw must be in raw dollars
-        (inverse-transformed if *_bc variant) so learning curves are directly readable.
-        """
+        """Log train/val loss and val RMSE (in raw dollars) for one epoch."""
         self._history["train_loss"].append(float(train_loss))
         self._history["val_loss"].append(float(val_loss))
         self._history["val_rmse_raw"].append(float(val_rmse_raw))
@@ -274,15 +231,8 @@ class ExperimentTracker:
         peak_vram_gb: float | None = None,
         extra_artifacts: dict[str, Any] | None = None,
     ) -> None:
-        """
-        Saves predictions.npz, optional extra artifacts, and appends one row
-        to master_runs_log.csv. All metric values must be in raw Canadian dollars.
-
-        predictions dict must contain keys:
-            train_y_true, train_y_pred, val_y_true, val_y_pred,
-            test_y_true, test_y_pred
-        All arrays in raw dollars.
-        """
+        """Save predictions.npz, extra artifacts, and append to master_runs_log.csv.
+        All metric values must be in raw Canadian dollars."""
         # Save predictions
         np.savez(
             self.run_dir / "predictions.npz",
