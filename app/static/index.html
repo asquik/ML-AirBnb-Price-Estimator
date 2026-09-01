@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Montreal Airbnb Price Estimator</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <span class="logo">⬡</span>
+      <h1>Montreal Airbnb <span class="accent">Price Estimator</span></h1>
+      <p class="subtitle">Enter your listing details to get a nightly price estimate.</p>
+    </div>
+  </header>
+
+  <main>
+    <form id="listing-form" novalidate>
+      <div class="form-grid">
+
+        <!-- Column 1 -->
+        <div class="form-col">
+          <label for="room_type">Room type <span class="req">*</span></label>
+          <select id="room_type" name="room_type" required>
+            <option value="Entire home/apt">Entire home / apt</option>
+            <option value="Private room">Private room</option>
+            <option value="Hotel room">Hotel room</option>
+            <option value="Shared room">Shared room</option>
+          </select>
+
+          <label for="neighbourhood">Neighbourhood <span class="req">*</span></label>
+          <select id="neighbourhood" name="neighbourhood" required>
+            <option value="">Loading…</option>
+          </select>
+
+          <label for="season">Season <span class="req">*</span></label>
+          <select id="season" name="season" required>
+            <option value="Summer" selected>Summer (Jul – Sep)</option>
+            <option value="Spring">Spring (Apr – Jun)</option>
+            <option value="Winter">Winter (Oct – Apr)</option>
+          </select>
+
+          <label for="accommodates">Accommodates</label>
+          <input type="number" id="accommodates" name="accommodates" value="2" min="1" max="16" />
+
+          <label for="bedrooms">Bedrooms</label>
+          <input type="number" id="bedrooms" name="bedrooms" value="1" min="0" max="10" />
+
+          <label for="bathrooms">Bathrooms</label>
+          <input type="number" id="bathrooms" name="bathrooms" value="1" min="0" max="10" step="0.5" />
+
+          <label for="beds">Beds</label>
+          <input type="number" id="beds" name="beds" value="1" min="0" max="20" />
+        </div>
+
+        <!-- Column 2 -->
+        <div class="form-col">
+          <label for="property_type">Property type</label>
+          <input type="text" id="property_type" name="property_type" value="Apartment" />
+
+          <label for="minimum_nights">Minimum nights</label>
+          <input type="number" id="minimum_nights" name="minimum_nights" value="2" min="1" max="365" />
+
+          <label for="availability_365">Availability (days/year)</label>
+          <input type="number" id="availability_365" name="availability_365" value="180" min="0" max="365" />
+
+          <label for="number_of_reviews">Number of reviews</label>
+          <input type="number" id="number_of_reviews" name="number_of_reviews" value="0" min="0" max="5000" />
+
+          <label for="host_total_listings_count">Host total listings</label>
+          <input type="number" id="host_total_listings_count" name="host_total_listings_count" value="1" min="1" max="500" />
+
+          <label for="latitude">Latitude</label>
+          <input type="number" id="latitude" name="latitude" value="45.5231" min="45.4" max="45.7" step="0.0001" />
+
+          <label for="longitude">Longitude</label>
+          <input type="number" id="longitude" name="longitude" value="-73.5828" min="-73.95" max="-73.47" step="0.0001" />
+        </div>
+      </div>
+
+      <!-- Full-width bottom section -->
+      <div class="form-bottom">
+        <div class="checkboxes">
+          <label class="checkbox-label">
+            <input type="checkbox" id="instant_bookable" name="instant_bookable" />
+            Instant bookable
+          </label>
+          <label class="checkbox-label">
+            <input type="checkbox" id="has_valid_image" name="has_valid_image" checked />
+            Has listing photo
+          </label>
+        </div>
+
+        <label for="description">Description <span class="hint">(optional — used for amenity detection)</span></label>
+        <textarea id="description" name="description" rows="4"
+          placeholder="Describe your listing. Mention amenities like wifi, parking, pool, metro access…"></textarea>
+
+        <button type="submit" id="submit-btn">
+          <span id="btn-text">Estimate Price</span>
+          <span id="btn-spinner" class="spinner hidden"></span>
+        </button>
+      </div>
+    </form>
+
+    <!-- Result panel -->
+    <section id="result-panel" class="hidden" aria-live="polite">
+      <div class="result-price-block">
+        <span class="result-label">Estimated nightly price</span>
+        <div class="result-price">$<span id="result-amount">—</span> <span class="result-currency">CAD</span></div>
+        <div class="result-range">Range: $<span id="result-low">—</span> – $<span id="result-high">—</span></div>
+        <div class="result-confidence" id="result-confidence"></div>
+      </div>
+
+      <div id="keywords-block" class="keywords-block hidden">
+        <h3>Amenities detected in description</h3>
+        <div id="keywords-list" class="keywords-list"></div>
+      </div>
+
+      <div id="warnings-block" class="warnings-block hidden">
+        <h3>Warnings</h3>
+        <ul id="warnings-list"></ul>
+      </div>
+    </section>
+
+    <div id="error-banner" class="error-banner hidden"></div>
+  </main>
+
+  <footer>
+    <p>LightGBM · 36 features · Test R² 0.56 · RMSE $144 · Montreal 2025 data</p>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

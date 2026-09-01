@@ -130,8 +130,8 @@ def main() -> None:
     print(f"  Saved model → {tracker.run_dir / 'model.joblib'}")
 
     train_pred_raw = to_raw_dollars(best_model.predict(X_train), price_transformer)
-    val_pred_raw   = to_raw_dollars(best_model.predict(X_val),   pt)
-    test_pred_raw  = to_raw_dollars(best_model.predict(X_test),  pt)
+    val_pred_raw   = to_raw_dollars(best_model.predict(X_val),   price_transformer)
+    test_pred_raw  = to_raw_dollars(best_model.predict(X_test),  price_transformer)
 
     train_m = compute_metrics(y_train_raw, train_pred_raw)
     val_m   = compute_metrics(y_val_raw,   val_pred_raw)
